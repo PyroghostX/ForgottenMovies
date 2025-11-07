@@ -3,7 +3,7 @@
 Forgotten Movies keeps Plex requests from gathering dust. It watches Overseerr for requests that have been fulfilled, checks Tautulli to see whether the requester actually watched them, and sends a friendly email reminder when something has been available for too long.                 
 
 
-## Features
+# Features
 
 - **Automated reminders:** Periodically scan Overseerr, cross-reference Tautulli history, and sends emails via SMTP to the original requester.
 - **Custom email template:** Default ships to `/app/data/email_template_original.html`; add `/app/data/email_template.html` to override while still receiving upstream updates.
@@ -12,7 +12,7 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Overseerr f
 - **Docker ready:** Single-container deployment with persistent TinyDB data, logs, and template files.
 
 
-## Prerequisites
+# Prerequisites
 
 - Plex Media Server
 - Tautulli
@@ -21,7 +21,7 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Overseerr f
 - TheMovieDB API key (optional but recommended) if you want poster artwork in the reminders.
 
 
-## Preview
+# Preview
 
 <p align="center">
   <img src="files/screenshot_email.png" alt="Screenshot Email" width="609">
@@ -31,7 +31,7 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Overseerr f
   <img src="files/screenshot_website.png" alt="Screenshot Website" width="788">
 </p>
 
-## Environment Variables
+# Environment Variables
 
 | Key | Description |
 |-----|-------------|
@@ -60,6 +60,8 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Overseerr f
 
 > **Important:** The email template is mandatory. If neither `/app/data/email_template.html` nor `/app/data/email_template_original.html` can be read or formatted with the supplied placeholders, the job raises an error and no reminders are sent. This prevents accidents with blank messages.
 
+# INSTALLATION
+
 ## Docker Compose Deployment
 
 ➡️ [`docker-compose.yml-example`](./docker-compose.yml-example)
@@ -71,7 +73,44 @@ docker-compose up -d
 open http://localhost:8741
 ```
 
-## Customising the Email Template
+## Docker run Deployment
+```bash
+docker run -d \
+  --name forgotten-movies \
+  --restart unless-stopped \
+  -e PUID=${PUID} \
+  -e PGID=${PGID} \
+  -e TZ=${TZ} \
+  -e TAUTULLI_URL="https://subdomain.example.com/api/v2" \
+  -e TAUTULLI_API_KEY="YOUR_KEY" \
+  -e OVERSEERR_URL="https://request.example.com/api/v1" \
+  -e OVERSEERR_API_KEY="YOUR_KEY" \
+  -e OVERSEERR_NUM_OF_HISTORY_RECORDS=200 \
+  -e REQUEST_URL="https://request.example.com" \
+  -e THEMOVIEDB_API_KEY="YOUR_KEY" \
+  -e SMTP_SERVER="smtp.gmail.com" \
+  -e SMTP_PORT=587 \
+  -e FROM_NAME="Plex Forgotten Movies" \
+  -e FROM_EMAIL_ADDRESS="email@gmail.com" \
+  -e EMAIL_PASSWORD="password" \
+  -e BCC_EMAIL_ADDRESS="email@gmail.com" \
+  -e ADMIN_NAME="admin_name" \
+  -e DAYS_SINCE_REQUEST=90 \
+  -e DAYS_SINCE_REQUEST_EMAIL_TEXT="3 months" \
+  -e HOURS_BETWEEN_EMAILS=168 \
+  -e JOB_INTERVAL_SECONDS=3600 \
+  -e INITIAL_DELAY_SECONDS=300 \
+  -e FLASK_SECRET_KEY="YOUR_KEY" \
+  -e LOG_LEVEL="INFO" \
+  -e DEBUG_MODE="false" \
+  -e DEBUG_MAX_EMAILS=2 \
+  -e DEBUG_EMAIL="email@gmail.com" \
+  -e DISABLE_SCHEDULER="false" \
+  -p 8741:8741 \
+  -v <your_data_path>:/app/data \
+  pyroghostx/forgottenmovies:latest
+```
+# Customising the Email Template
 
 1. In your /app/data folder Copy the "email_template_original.html" and name it "email_template.html"
 2. The job automatically reloads the template when the file changes—no restart required.
@@ -95,25 +134,25 @@ Helpful context variables available inside the template:
 Because the template uses Jinja, you can wrap sections in `{% if plex_url %}...{% endif %}` to hide buttons or images when data is missing.
 
 
-## UI Tour
+# UI Tour
 
 - **Dashboard (`/`)** - Run the job manually, review the upcoming reminder queue (oldest requests first), see the most recent reminder emails, and manage the unsubscribe list.
 - **Logs (`/logs`)** - Live tail of the application log with controls to change the log level, clear the log files, and toggle auto-refresh.
 - **Settings (`/settings`)** - Enable or disable the background scheduler that performs automated API calls and sends reminder emails.
 
 
-## Support
+# Support
 
 - For now keep all questions and suggestions in github, if this grows enough then I may make a subreddit or discord channel.
 
 
-## Debugging & Operations
+# Debugging & Operations
 
 - Set `DEBUG_MODE=true` to reroute mail to `DEBUG_EMAIL` (or `FROM_EMAIL_ADDRESS` if `DEBUG_EMAIL` is blank) and cap sends via `DEBUG_MAX_EMAILS`.
 - Logs rotate when they reach `LOG_FILE_MAX_BYTES`. Adjust or disable rotation via environment variables if needed.
 
 
-## Architecture Overview
+# Architecture Overview
 
 | Component | Purpose |
 |-----------|---------|
