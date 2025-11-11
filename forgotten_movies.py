@@ -695,10 +695,11 @@ def _attempt_send_request(
 
 # Transform Plex URL
 def transform_plex_url(plex_url):
-    # Replace #! with web/index.html#! for browser link
-    # if not plex_url:
-    #     return None, None
+    # Bail out early when Overseerr hasn't populated a Plex URL yet.
+    if not plex_url:
+        return None, None
 
+    # Replace #! with web/index.html#! for browser link
     browser_url = plex_url.replace('#!', 'web/index.html#!')
 
     # Construct a mobile-friendly Plex link using regex to extract server and key details
