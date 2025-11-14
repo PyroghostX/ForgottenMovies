@@ -16,7 +16,7 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Overseerr f
 
 - Plex Media Server
 - Tautulli
-- Overseerr or Jellyseerr
+- Overseerr or Jellyseerr (Important: Make sure the "Web App url" set on your overseerr plex settings page)
 - SMTP email so Forgotten Movies can send reminder emails (other methods built out later).
 - TheMovieDB API key (optional but recommended) if you want poster artwork in the reminders.
 
@@ -185,7 +185,9 @@ Helpful context variables available inside the template:
 | `request_url` | Link back to your request portal (may be empty). |
 | `admin_name` | Value of `ADMIN_NAME`. |
 
-Because the template uses Jinja, you can wrap sections in `{% if plex_url %}...{% endif %}` to hide buttons or images when data is missing.
+For example: The {{ media_type }} <strong>{{ title }}</strong> that you requested was added about {{ time_since_text }} ago but you haven't watched it yet.
+            Want to give it a watch?. 
+            Because the template uses Jinja, you can wrap sections in `{% if plex_url %}...{% endif %}` to hide buttons or images when data is missing.
 
 
 # UI Tour
