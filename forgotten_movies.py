@@ -1,6 +1,7 @@
 import logging
 import requests
 import smtplib
+import ssl
 import time
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -20,6 +21,13 @@ OVERSEERR_API_KEY = os.getenv("OVERSEERR_API_KEY")
 OVERSEERR_URL = os.getenv("OVERSEERR_URL")
 SMTP_SERVER = os.getenv("SMTP_SERVER")
 SMTP_PORT = int(os.getenv("SMTP_PORT", 587))  # Default to 587 if not set
+SMTP_ENCRYPTION_RAW = os.getenv("SMTP_ENCRYPTION")
+if SMTP_ENCRYPTION_RAW:
+    SMTP_ENCRYPTION = SMTP_ENCRYPTION_RAW.strip().upper()
+else:
+    SMTP_ENCRYPTION = "SSL" if SMTP_PORT == 465 else "STARTTLS"
+if SMTP_ENCRYPTION not in {"STARTTLS", "SSL", "NONE"}:
+    raise RuntimeError("SMTP_ENCRYPTION must be one of STARTTLS, SSL, or NONE")
 FROM_EMAIL_ADDRESS = os.getenv("FROM_EMAIL_ADDRESS")
 FROM_NAME = os.getenv("FROM_NAME")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
@@ -805,15 +813,31 @@ def send_email(to_address, subject, body, is_html=False):
 
     if DEBUG_MODE:
         logger.debug(
-            "Connecting to SMTP server %s:%s as %s.", SMTP_SERVER, SMTP_PORT, FROM_EMAIL_ADDRESS
+            "Connecting to SMTP server %s:%s as %s using %s.",
+            SMTP_SERVER,
+            SMTP_PORT,
+            FROM_EMAIL_ADDRESS,
+            SMTP_ENCRYPTION,
         )
     try:
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            if DEBUG_MODE:
-                logger.debug("SMTP connection established, issuing STARTTLS.")
-            server.starttls()
-            if DEBUG_MODE:
-                logger.debug("STARTTLS negotiation succeeded; logging in.")
+        ssl_context = ssl.create_default_context()
+        if SMTP_ENCRYPTION == "SSL":
+            smtp_conn = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, context=ssl_context)
+        else:
+            smtp_conn = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        with smtp_conn as server:
+            if SMTP_ENCRYPTION == "STARTTLS":
+                if DEBUG_MODE:
+                    logger.debug("SMTP connection established, issuing STARTTLS.")
+                server.starttls(context=ssl_context)
+                if DEBUG_MODE:
+                    logger.debug("STARTTLS negotiation succeeded; logging in.")
+            elif SMTP_ENCRYPTION == "SSL":
+                if DEBUG_MODE:
+                    logger.debug("Implicit SSL/TLS connection established; logging in.")
+            else:
+                if DEBUG_MODE:
+                    logger.debug("SMTP encryption disabled per configuration; logging in without TLS.")
             server.login(FROM_EMAIL_ADDRESS, EMAIL_PASSWORD)
             if DEBUG_MODE:
                 logger.debug("SMTP login succeeded; sending message to %s.", actual_recipient)

@@ -39,6 +39,7 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Overseerr f
 | `OVERSEERR_API_KEY`, `OVERSEERR_URL` | Overseerr or Jellyseerr API details used to pull fulfilled requests; point the URL at the `/api/v1` root (e.g. `https://request.example.com/api/v1`). |
 | `THEMOVIEDB_API_KEY` | Fetches poster artwork for reminder emails. Leave unset to skip artwork (emails still send). |
 | `SMTP_SERVER`, `SMTP_PORT` | SMTP host/port for STARTTLS email delivery (port defaults to 587). |
+| `SMTP_ENCRYPTION` | One of `STARTTLS` (default), `SSL`, or `NONE`. If unset and `SMTP_PORT=465`, the app automatically picks `SSL`. |
 | `FROM_EMAIL_ADDRESS`, `FROM_NAME`, `EMAIL_PASSWORD` | Outbound email identity and password. |
 | `BCC_EMAIL_ADDRESS` | Optional address copied on reminders (you may also set it equal to `FROM_EMAIL_ADDRESS`). |
 | `ADMIN_NAME` | Shown in reminder copy so recipients know who to contact. |
@@ -58,6 +59,7 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Overseerr f
 | `JOB_LOCK_TIMEOUT` | Seconds to wait when acquiring the inter-process job lock (default `0.1`). |
 | `ROOT`, `PUID`, `PGID`, `TZ` | Docker-only: bind mount root, container UID/GID, timezone. |
 
+> **Tip:** When credentials contain characters such as `!`, `$`, `&`, or `#`, wrap the value in quotes (or store them inside an `.env` file) so your shell/YAML parser doesn't truncate or reinterpret the password.
 > **Important:** The email template is mandatory. If neither `/app/data/email_template.html` nor `/app/data/email_template_original.html` can be read or formatted with the supplied placeholders, the job raises an error and no reminders are sent. This prevents accidents with blank messages.
 
 # INSTALLATION
@@ -90,6 +92,7 @@ docker run -d \
   -e THEMOVIEDB_API_KEY="YOUR_KEY" \
   -e SMTP_SERVER="smtp.gmail.com" \
   -e SMTP_PORT=587 \
+  -e SMTP_ENCRYPTION="STARTTLS" \
   -e FROM_NAME="Plex Forgotten Movies" \
   -e FROM_EMAIL_ADDRESS="email@gmail.com" \
   -e EMAIL_PASSWORD="password" \
@@ -134,6 +137,7 @@ docker run
   -e 'THEMOVIEDB_API_KEY'='1xxxxxxxxxxxxxxxxxxxxxxxxxxxx5'
   -e 'SMTP_SERVER'='xxxxxxxxx'
   -e 'SMTP_PORT'='587'
+  -e 'SMTP_ENCRYPTION'='STARTTLS'
   -e 'FROM_NAME'='Plex'
   -e 'FROM_EMAIL_ADDRESS'='ab@xyz.de'
   -e 'EMAIL_PASSWORD'='xxxxxxxxxxxxxxxxxx'
