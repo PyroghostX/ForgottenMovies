@@ -907,8 +907,12 @@ def main():
             ratingkey = request['media']['ratingKey']
             media_type = 'movie' if request['media']['mediaType'] == 'movie' else 'tv show'
             requested_by_username = request['requestedBy']['plexUsername']
-            # Transform plexUrl
-            plex_url, mobile_url = transform_plex_url(request['media'].get('mediaUrl'))
+            # Resolve Plex URLs (new Overseerr fields + backward compatibility)
+            raw_plex_url = media.get('plexUrl') or media.get('mediaUrl')
+            ios_mobile_url = media.get('iOSPlexUrl')
+            
+            plex_url, fallback_mobile = transform_plex_url(raw_plex_url)
+            mobile_url = ios_mobile_url or fallback_mobile
             # Fetch poster URL from TMDB and add it to the database
             poster_url = get_tmdb_poster(tmdb_id, media_type)
 
