@@ -44,6 +44,7 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Overseerr f
 | `THEMOVIEDB_API_KEY` | Fetches poster artwork for reminder emails. Leave unset to skip artwork (emails still send). |
 | `SMTP_SERVER`, `SMTP_PORT` | SMTP host/port for STARTTLS email delivery (port defaults to 587). |
 | `SMTP_ENCRYPTION` | One of `STARTTLS` (default), `SSL`, or `NONE`. If unset and `SMTP_PORT=465`, the app automatically picks `SSL`. |
+| `SMTP_USERNAME` | Optional SMTP auth username when it differs from `FROM_EMAIL_ADDRESS`. |
 | `FROM_EMAIL_ADDRESS`, `FROM_NAME`, `EMAIL_PASSWORD` | Outbound email identity and password. |
 | `BCC_EMAIL_ADDRESS` | Optional address copied on reminders (you may also set it equal to `FROM_EMAIL_ADDRESS`). |
 | `ADMIN_NAME` | Shown in reminder copy so recipients know who to contact. |
@@ -97,6 +98,7 @@ docker run -d \
   -e SMTP_SERVER="smtp.gmail.com" \
   -e SMTP_PORT=587 \
   -e SMTP_ENCRYPTION="STARTTLS" \
+  -e SMTP_USERNAME="smtp-login@example.com" \
   -e FROM_NAME="Plex Forgotten Movies" \
   -e FROM_EMAIL_ADDRESS="email@gmail.com" \
   -e EMAIL_PASSWORD="password" \
@@ -142,6 +144,7 @@ docker run
   -e 'SMTP_SERVER'='xxxxxxxxx'
   -e 'SMTP_PORT'='587'
   -e 'SMTP_ENCRYPTION'='STARTTLS'
+  -e 'SMTP_USERNAME'='smtp-login@xyz.de'
   -e 'FROM_NAME'='Plex'
   -e 'FROM_EMAIL_ADDRESS'='ab@xyz.de'
   -e 'EMAIL_PASSWORD'='xxxxxxxxxxxxxxxxxx'

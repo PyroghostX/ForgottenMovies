@@ -17,6 +17,7 @@ services:
       - SMTP_SERVER=smtp.gmail.com
       - SMTP_PORT=587
       - SMTP_ENCRYPTION=STARTTLS # use SSL for implicit TLS (port 465) or NONE to skip encryption
+      - SMTP_USERNAME=smtp-login@example.com # Optional if SMTP auth differs from FROM_EMAIL_ADDRESS
       - FROM_NAME="Plex Forgotten Movies"
       - FROM_EMAIL_ADDRESS=email@gmail.com
       - EMAIL_PASSWORD=password # go make an app password https://myaccount.google.com/apppasswords
