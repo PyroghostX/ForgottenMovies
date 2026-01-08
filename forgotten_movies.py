@@ -912,7 +912,14 @@ def send_email(to_address, subject, body, is_html=False):
         msg = MIMEText(body)
 
     msg['Subject'] = subject
-    msg['From'] = f"{FROM_NAME} <{FROM_EMAIL_ADDRESS}>"  # Set custom "From" name
+    auth_user = (SMTP_USERNAME or "").strip() or FROM_EMAIL_ADDRESS
+    from_address = (FROM_EMAIL_ADDRESS or "").strip() or auth_user or ""
+    if FROM_NAME:
+        msg['From'] = f"{FROM_NAME} <{from_address}>"
+    else:
+        msg['From'] = from_address
+    if auth_user and auth_user != from_address:
+        msg['Sender'] = auth_user
 
     # When debugging, redirect the email to ourselves and avoid contacting watchers.
     actual_recipient = to_address
@@ -925,7 +932,6 @@ def send_email(to_address, subject, body, is_html=False):
         msg['To'] = actual_recipient
         msg['Bcc'] = BCC_EMAIL_ADDRESS
 
-    auth_user = (SMTP_USERNAME or "").strip() or FROM_EMAIL_ADDRESS
     if DEBUG_MODE:
         logger.debug(
             "Connecting to SMTP server %s:%s as %s using %s.",
@@ -959,7 +965,8 @@ def send_email(to_address, subject, body, is_html=False):
                     logger.debug("SMTP login succeeded; sending message to %s.", actual_recipient)
             elif DEBUG_MODE:
                 logger.debug("SMTP credentials missing; sending without AUTH to %s.", actual_recipient)
-            server.send_message(msg)
+            from_addr = auth_user or from_address
+            server.send_message(msg, from_addr=from_addr or None)
             if DEBUG_MODE:
                 try:
                     server.noop()
