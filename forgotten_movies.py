@@ -30,6 +30,7 @@ if SMTP_ENCRYPTION not in {"STARTTLS", "SSL", "NONE"}:
     raise RuntimeError("SMTP_ENCRYPTION must be one of STARTTLS, SSL, or NONE")
 FROM_EMAIL_ADDRESS = os.getenv("FROM_EMAIL_ADDRESS")
 FROM_NAME = os.getenv("FROM_NAME")
+SMTP_USERNAME = os.getenv("SMTP_USERNAME")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 BCC_EMAIL_ADDRESS = os.getenv("BCC_EMAIL_ADDRESS")
 OVERSEERR_NUM_OF_HISTORY_RECORDS = int(os.getenv("OVERSEERR_NUM_OF_HISTORY_RECORDS", 10))  # Default 10
@@ -911,8 +912,12 @@ def send_email(to_address, subject, body, is_html=False):
         msg = MIMEText(body)
 
     msg['Subject'] = subject
-    msg['From'] = f"{FROM_NAME} <{FROM_EMAIL_ADDRESS}>"  # Set custom "From" name
-
+    auth_user = (SMTP_USERNAME or "").strip() or FROM_EMAIL_ADDRESS
+    from_address = (FROM_EMAIL_ADDRESS or "").strip() or auth_user or ""
+    if FROM_NAME:
+        msg['From'] = f"{FROM_NAME} <{from_address}>"
+    else:
+        msg['From'] = from_address
     # When debugging, redirect the email to ourselves and avoid contacting watchers.
     actual_recipient = to_address
     if DEBUG_MODE:
@@ -929,7 +934,7 @@ def send_email(to_address, subject, body, is_html=False):
             "Connecting to SMTP server %s:%s as %s using %s.",
             SMTP_SERVER,
             SMTP_PORT,
-            FROM_EMAIL_ADDRESS,
+            auth_user,
             SMTP_ENCRYPTION,
         )
     try:
@@ -951,9 +956,12 @@ def send_email(to_address, subject, body, is_html=False):
             else:
                 if DEBUG_MODE:
                     logger.debug("SMTP encryption disabled per configuration; logging in without TLS.")
-            server.login(FROM_EMAIL_ADDRESS, EMAIL_PASSWORD)
-            if DEBUG_MODE:
-                logger.debug("SMTP login succeeded; sending message to %s.", actual_recipient)
+            if auth_user and EMAIL_PASSWORD:
+                server.login(auth_user, EMAIL_PASSWORD)
+                if DEBUG_MODE:
+                    logger.debug("SMTP login succeeded; sending message to %s.", actual_recipient)
+            elif DEBUG_MODE:
+                logger.debug("SMTP credentials missing; sending without AUTH to %s.", actual_recipient)
             server.send_message(msg)
             if DEBUG_MODE:
                 try:
