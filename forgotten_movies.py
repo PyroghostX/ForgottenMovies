@@ -174,12 +174,13 @@ def build_email_body(
     """Build email body and return (body, unsubscribe_url) tuple."""
     template = load_email_template()
 
-    # Generate unsubscribe URL
-    try:
-        unsubscribe_url = build_unsubscribe_url(email_address)
-    except Exception as exc:
-        logger.warning("Failed to generate unsubscribe URL for %s: %s", email_address, exc)
-        unsubscribe_url = ""
+    # Generate unsubscribe URL (only if feature is enabled)
+    unsubscribe_url = ""
+    if UNSUBSCRIBE_ENABLED:
+        try:
+            unsubscribe_url = build_unsubscribe_url(email_address)
+        except Exception as exc:
+            logger.warning("Failed to generate unsubscribe URL for %s: %s", email_address, exc)
 
     context = SafeDict(
         plex_username=plex_username,
