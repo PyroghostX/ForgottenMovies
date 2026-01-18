@@ -5,6 +5,7 @@ import ssl
 import time
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.utils import formatdate, make_msgid
 from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
 from threading import RLock
@@ -12,6 +13,7 @@ from tinydb import TinyDB, Query
 from tinydb.table import Document
 import os
 import shutil
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from jinja2 import Template, TemplateError
 from typing import NamedTuple
 
@@ -44,6 +46,12 @@ HOURS_BETWEEN_EMAILS_EMAIL_TEXT = os.getenv("HOURS_BETWEEN_EMAILS_EMAIL_TEXT", f
 DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
 DEBUG_EMAIL = os.getenv("DEBUG_EMAIL")
 DEBUG_MAX_EMAILS = int(os.getenv("DEBUG_MAX_EMAILS", 2))
+
+# Optional self-service unsubscribe feature
+UNSUBSCRIBE_SECRET_KEY = os.getenv("UNSUBSCRIBE_SECRET_KEY")
+_base_url = os.getenv("BASE_URL")
+BASE_URL = _base_url.rstrip("/") if _base_url else None
+UNSUBSCRIBE_ENABLED = bool(UNSUBSCRIBE_SECRET_KEY and BASE_URL)
 
 
 REQUIRED_ENV = {
@@ -161,8 +169,18 @@ def build_email_body(
     plex_url: str | None,
     poster_url: str | None,
     mobile_url: str | None,
-) -> str:
+    email_address: str,
+) -> tuple[str, str]:
+    """Build email body and return (body, unsubscribe_url) tuple."""
     template = load_email_template()
+
+    # Generate unsubscribe URL (only if feature is enabled)
+    unsubscribe_url = ""
+    if UNSUBSCRIBE_ENABLED:
+        try:
+            unsubscribe_url = build_unsubscribe_url(email_address)
+        except Exception as exc:
+            logger.warning("Failed to generate unsubscribe URL for %s: %s", email_address, exc)
 
     context = SafeDict(
         plex_username=plex_username,
@@ -174,10 +192,12 @@ def build_email_body(
         mobile_url=mobile_url or "",
         request_url=REQUEST_URL or "",
         admin_name=ADMIN_NAME or "",
+        unsubscribe_url=unsubscribe_url,
     )
 
     try:
-        return template.render(**context)
+        body = template.render(**context)
+        return body, unsubscribe_url
     except TemplateError as exc:
         raise RuntimeError(f"Email template formatting failed: {exc}") from exc
     except Exception as exc:
@@ -228,6 +248,44 @@ EMAIL_USER_LOCK = RLock()
 
 def _stable_doc_id(email: str) -> int:
     return (abs(hash(email)) % 2_147_000_000) + 1
+
+
+def _get_unsubscribe_serializer() -> URLSafeTimedSerializer:
+    if not UNSUBSCRIBE_SECRET_KEY:
+        raise RuntimeError("UNSUBSCRIBE_SECRET_KEY not configured")
+    return URLSafeTimedSerializer(UNSUBSCRIBE_SECRET_KEY)
+
+
+def _encrypt_email(email: str) -> str:
+    serializer = _get_unsubscribe_serializer()
+    return serializer.dumps(email.strip().lower(), salt='unsubscribe')
+
+
+def _decrypt_email(token: str, max_age: int = 7776000) -> str:
+    # max_age: 7776000 seconds = 90 days
+    serializer = _get_unsubscribe_serializer()
+    try:
+        return serializer.loads(token, salt='unsubscribe', max_age=max_age)
+    except (BadSignature, SignatureExpired) as exc:
+        raise ValueError(f"Invalid or expired token: {exc}") from exc
+
+
+def build_unsubscribe_url(email: str) -> str:
+    if not UNSUBSCRIBE_ENABLED:
+        raise RuntimeError("Self-service unsubscribe feature is not enabled")
+    normalized = email.strip().lower()
+    encrypted_email = _encrypt_email(normalized)
+    return f"{BASE_URL}/unsubscribe/{encrypted_email}"
+
+
+def build_resubscribe_url(email: str) -> str:
+    if not UNSUBSCRIBE_ENABLED:
+        raise RuntimeError("Self-service unsubscribe feature is not enabled")
+    normalized = email.strip().lower()
+
+    encrypted_email = _encrypt_email(normalized)
+    return f"{BASE_URL}/resubscribe/{encrypted_email}"
+
 
 SCHEDULER_DISABLED_KEY = "scheduler_disabled"
 DEFAULT_SCHEDULER_DISABLED = os.getenv("DISABLE_SCHEDULER", "false").lower() == "true"
@@ -811,13 +869,14 @@ def _attempt_send_request(
                 return SendOutcome(False, False, "Reminder recently sent; cooldown in effect.", title, None, None)
 
     email_subject = f"Plex Reminder: {title} is available and unwatched"
-    email_body = build_email_body(
+    email_body, unsubscribe_url = build_email_body(
         plex_username=plex_username,
         media_type=media_type,
         title=title,
         plex_url=plex_url,
         poster_url=poster_url,
         mobile_url=mobile_url,
+        email_address=email_value,
     )
 
     if DEBUG_MODE:
@@ -830,7 +889,7 @@ def _attempt_send_request(
             media_type,
         )
     try:
-        recipient = send_email(email_value, email_subject, email_body, is_html=True)
+        recipient = send_email(email_value, email_subject, email_body, is_html=True, unsubscribe_url=unsubscribe_url)
     except Exception:
         logger.exception(
             "Email send failed for %s (%s) [request %s, rating_key=%s].",
@@ -897,7 +956,7 @@ def transform_plex_url(plex_url):
     
     
 # Send email notification
-def send_email(to_address, subject, body, is_html=False):
+def send_email(to_address, subject, body, is_html=False, unsubscribe_url=None):
     if DEBUG_MODE:
         logger.debug(
             "send_email invoked for %s (subject=%s, html=%s).",
@@ -927,7 +986,21 @@ def send_email(to_address, subject, body, is_html=False):
         msg['X-Debug-Original-To'] = to_address
     else:
         msg['To'] = actual_recipient
-        msg['Bcc'] = BCC_EMAIL_ADDRESS
+        if BCC_EMAIL_ADDRESS:
+            msg['Bcc'] = BCC_EMAIL_ADDRESS
+
+    if 'Date' not in msg:
+        msg['Date'] = formatdate(localtime=True)
+
+    if 'Message-ID' not in msg:
+        # Use your domain so it looks clean and consistent
+        # (make_msgid will include angle brackets)
+        msg['Message-ID'] = make_msgid(domain=(from_address.split("@")[-1] if "@" in from_address else None))
+
+    # Add RFC 8058 List-Unsubscribe headers (HTTPS only - required for one-click)
+    if unsubscribe_url and BASE_URL and BASE_URL.lower().startswith('https://'):
+        msg['List-Unsubscribe'] = f'<{unsubscribe_url}>'
+        msg['List-Unsubscribe-Post'] = 'List-Unsubscribe=One-Click'
 
     if DEBUG_MODE:
         logger.debug(

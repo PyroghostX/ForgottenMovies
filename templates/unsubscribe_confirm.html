@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block body_class %} class="public-page"{% endblock %}
+
+{% block content %}
+<div class="public-container">
+    <div class="icon warning">⚠️</div>
+    <h1 class="warning">Confirm Unsubscribe</h1>
+
+    <div class="public-message">
+        Are you sure you want to unsubscribe from Forgotten Movies reminders?
+    </div>
+
+    {% if email %}
+        <div class="email-info">Email: <strong>{{ email }}</strong></div>
+    {% endif %}
+
+    <form method="POST" action="{{ request.path }}">
+        <button type="submit" class="confirm-button danger">
+            Confirm Unsubscribe
+        </button>
+    </form>
+
+    <div class="public-footer">
+        Forgotten Movies
+    </div>
+</div>
+{% endblock %}

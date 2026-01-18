@@ -8,6 +8,7 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Overseerr f
 - **Automated reminders:** Periodically scan Overseerr, cross-reference Tautulli history, and sends emails via SMTP to the original requester.
 - **Custom email template:** Default ships to `/app/data/email_template_original.html`; add `/app/data/email_template.html` to override while still receiving upstream updates.
 - **Dashboard:** Kick off manual runs, review the upcoming reminder queue, see recently sent reminders, and manage unsubscribed addresses.
+- **Self-service unsubscribe (optional):** Let users unsubscribe themselves via encrypted links in emails instead of managing the list manually. Works with any reverse proxy setup.
 - **Scheduler toggle:** Temporarily pause automated API calls and emails from the settings page.
 - **Docker ready:** Single-container deployment with persistent TinyDB data, logs, and template files.
 
@@ -61,6 +62,11 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Overseerr f
 | `DEBUG_EMAIL`, `DEBUG_MAX_EMAILS` | Override receiving address and cap while in debug mode (default max = 2). |
 | `FLASK_SECRET_KEY` | Session/flash signing key for the Flask UI. |
 | `EMAIL_TEMPLATE_PATH` | Optional custom override path for the HTML template (defaults to `/app/data/email_template.html`). |
+| `UNSUBSCRIBE_SECRET_KEY` | Optional: Secret key for signing unsubscribe tokens. Generate with `python -c "import secrets; print(secrets.token_hex(32))"`. Leave unset to disable self-service unsubscribe. |
+| `BASE_URL` | Optional: Public URL where your instance is accessible (e.g. `https://forgotten.example.com`). Required only when `UNSUBSCRIBE_SECRET_KEY` is set. |
+| `TRUSTED_PROXIES` | Comma-separated IPs or CIDRs of trusted reverse proxies (e.g. `172.16.0.0/12,10.0.0.1`). Required to trust `REAL_IP_HEADER`. |
+| `REAL_IP_HEADER` | Header containing client IP set by your reverse proxy (default: `X-Forwarded-For`). Only trusted when request comes from `TRUSTED_PROXIES`. Used for subscription management logging. |
+| `REDIS_URL` | Optional Redis URL for rate limiting storage (e.g. `redis://localhost:6379/0`). Defaults to in-memory storage, which doesn't persist across restarts or scale across instances. |
 | `JOB_LOCK_TIMEOUT` | Seconds to wait when acquiring the inter-process job lock (default `0.1`). |
 | `ROOT`, `PUID`, `PGID`, `TZ` | Docker-only: bind mount root, container UID/GID, timezone. |
 
@@ -191,11 +197,158 @@ Helpful context variables available inside the template:
 | `poster_url` | Poster artwork URL (if available). |
 | `request_url` | Link back to your request portal (may be empty). |
 | `admin_name` | Value of `ADMIN_NAME`. |
+| `unsubscribe_url` | encrypted unsubscribe link (empty when feature disabled). |
 
 For example: The {{ media_type }} <strong>{{ title }}</strong> that you requested was added about {{ time_since_text }} ago but you haven't watched it yet.
-            Want to give it a watch?. 
+            Want to give it a watch?.
             Because the template uses Jinja, you can wrap sections in `{% if plex_url %}...{% endif %}` to hide buttons or images when data is missing.
 
+
+# Self-Service Unsubscribe (Optional)
+
+When enabled, reminder emails include an unsubscribe link that lets users manage their subscription without admin intervention. The feature uses cryptographically signed tokens so links can't be forged without the secret key.
+
+## Enabling the Feature
+
+1. **Generate a secret key:**
+   ```bash
+   python -c "import secrets; print(secrets.token_hex(32))"
+   ```
+
+2. **Set both environment variables:**
+   ```yaml
+   UNSUBSCRIBE_SECRET_KEY: "your-64-character-hex-key"
+   BASE_URL: "https://forgotten.example.com"
+   ```
+
+3. **Restart the container.** When enabled, reminder emails will include an unsubscribe link in the footer and email headers.
+
+When disabled (default), emails send without unsubscribe links and the endpoints return 404.
+
+## Email Headers & Deliverability
+
+When enabled, reminder emails include RFC 8058 compliant headers for one-click unsubscribe:
+
+```
+List-Unsubscribe: <https://forgotten.example.com/unsubscribe/token>
+List-Unsubscribe-Post: List-Unsubscribe=One-Click
+```
+
+These headers allow Gmail, Apple Mail, and other clients/providers to display a native "Unsubscribe" button in their UI. The headers are only added when `BASE_URL` uses HTTPS (required by RFC 8058).
+
+**For optimal inbox placement**, ensure your sending domain has proper email authentication, verfication, and policies:
+
+- **SPF** - Authorizes your mail server to send on behalf of your domain
+- **DKIM** - Cryptographically signs emails to verify authenticity
+- **DMARC** - Policy telling receivers how to handle SPF/DKIM failures
+
+> **Note:** Even with proper configuration, email providers may not display the one-click unsubscribe button based on sender reputation, spam scores, or other filtering criteria. The in-email unsubscribe link will always work regardless.
+
+**References:**
+- [RFC 8058 - One-Click Unsubscribe](https://datatracker.ietf.org/doc/html/rfc8058)
+- [Google Email Sender Guidelines](https://support.google.com/mail/answer/81126)
+- [Apple iCloud Mail Postmaster Information](https://support.apple.com/en-us/102322)
+
+## Reverse Proxy Configuration
+
+The unsubscribe/resubscribe endpoints (`/unsubscribe/<token>` and `/resubscribe/<token>`) should be publicly accessible, but you probably want to hide the admin dashboard from the internet.
+
+**Example nginx configuration for subscription endpoints**:
+```nginx
+server {
+    listen 443 ssl;
+    server_name forgotten.*;
+    include /config/nginx/ssl.conf;
+
+    # Public endpoints - no auth required
+    location ~ ^/(unsubscribe|resubscribe)/[^/]+$ {
+        include /config/nginx/proxy.conf;
+        include /config/nginx/resolver.conf;
+        proxy_pass http://forgotten-movies:8741;
+    }
+
+    # Everything else returns 404 (hides admin interface)
+    location / {
+        return 404;
+    }
+}
+```
+
+### Rate Limiting (Optional but Recommended)
+
+If you're exposing the unsubscribe endpoints publicly via nginx or other, add rate limiting to prevent DoS attacks.
+
+#### Example 1: Public unsubscribe endpoints only (admin hidden)
+
+```nginx
+
+# Rate limiting zone - 20 requests per minute per IP
+# Place this OUTSIDE the server block (at the top of the file)
+limit_req_zone $binary_remote_addr zone=unsubscribe_limit:10m rate=20r/m;
+limit_req_status 429;
+
+server {
+    listen 443 ssl;
+    server_name forgotten.*;
+    include /config/nginx/ssl.conf;
+
+    client_max_body_size 0;
+
+    # Public endpoints with rate limiting
+    location ~ ^/(unsubscribe|resubscribe)/[^/]+$ {
+        # Apply rate limiting (burst=5 allows brief spikes)
+        limit_req zone=unsubscribe_limit burst=5 nodelay;
+
+        include /config/nginx/proxy.conf;
+        include /config/nginx/resolver.conf;
+        proxy_pass http://forgotten-movies:8741;
+    }
+
+    # Everything else returns 404 (hides admin interface)
+    location / {
+        return 404;
+    }
+}
+```
+
+#### Example 2: Public unsubscribe endpoints + proxied admin (with auth)
+
+```nginx
+
+# Rate limiting zone - 20 requests per minute per IP
+limit_req_zone $binary_remote_addr zone=unsubscribe_limit:10m rate=20r/m;
+limit_req_status 429;
+
+server {
+    listen 443 ssl;
+    server_name forgotten.*;
+    include /config/nginx/ssl.conf;
+
+    client_max_body_size 0;
+
+    # Public endpoints with rate limiting (no auth required)
+    location ~ ^/(unsubscribe|resubscribe)/[^/]+$ {
+        # Apply rate limiting (burst=5 allows brief spikes)
+        limit_req zone=unsubscribe_limit burst=5 nodelay;
+
+        include /config/nginx/proxy.conf;
+        include /config/nginx/resolver.conf;
+        proxy_pass http://forgotten-movies:8741;
+    }
+
+    # Admin interface (authenticated, NO rate limiting)
+    location / {
+        # Require authentication for admin pages
+        include /config/nginx/proxy.conf;
+        include /config/nginx/resolver.conf;
+        proxy_pass http://forgotten-movies:8741;
+
+        # Add your favorite auth provider or use basic auth
+        auth_basic "Forgotten Movies Admin";
+        auth_basic_user_file /config/nginx/.htpasswd;
+    }
+}
+```
 
 # UI Tour
 
