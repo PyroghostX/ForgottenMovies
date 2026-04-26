@@ -292,6 +292,11 @@ def build_resubscribe_url(email: str) -> str:
 SCHEDULER_DISABLED_KEY = "scheduler_disabled"
 DEFAULT_SCHEDULER_DISABLED = os.getenv("DISABLE_SCHEDULER", "false").lower() == "true"
 LAST_WATCH_STATUS_CHECK_KEY = "last_watch_status_check"
+LAST_JOB_STARTED_KEY = "last_job_started"
+LAST_JOB_COMPLETED_KEY = "last_job_completed"
+LAST_JOB_REASON_KEY = "last_job_reason"
+LAST_JOB_STATUS_KEY = "last_job_status"
+LAST_JOB_MESSAGE_KEY = "last_job_message"
 
 if not settings_db.contains(Setting.key == SCHEDULER_DISABLED_KEY):
     settings_db.insert({"key": SCHEDULER_DISABLED_KEY, "value": DEFAULT_SCHEDULER_DISABLED})
@@ -320,6 +325,36 @@ def set_last_watch_status_check(timestamp: datetime) -> None:
         {"key": LAST_WATCH_STATUS_CHECK_KEY, "value": timestamp.isoformat()},
         Setting.key == LAST_WATCH_STATUS_CHECK_KEY
     )
+
+
+def mark_job_started(reason: str, timestamp: datetime | None = None) -> None:
+    timestamp = timestamp or datetime.now()
+    settings_db.upsert({"key": LAST_JOB_STARTED_KEY, "value": timestamp.isoformat()}, Setting.key == LAST_JOB_STARTED_KEY)
+    settings_db.upsert({"key": LAST_JOB_REASON_KEY, "value": reason}, Setting.key == LAST_JOB_REASON_KEY)
+    settings_db.upsert({"key": LAST_JOB_STATUS_KEY, "value": "running"}, Setting.key == LAST_JOB_STATUS_KEY)
+    settings_db.upsert({"key": LAST_JOB_MESSAGE_KEY, "value": ""}, Setting.key == LAST_JOB_MESSAGE_KEY)
+
+
+def mark_job_completed(reason: str, status: str, message: str = "", timestamp: datetime | None = None) -> None:
+    timestamp = timestamp or datetime.now()
+    settings_db.upsert({"key": LAST_JOB_COMPLETED_KEY, "value": timestamp.isoformat()}, Setting.key == LAST_JOB_COMPLETED_KEY)
+    settings_db.upsert({"key": LAST_JOB_REASON_KEY, "value": reason}, Setting.key == LAST_JOB_REASON_KEY)
+    settings_db.upsert({"key": LAST_JOB_STATUS_KEY, "value": status}, Setting.key == LAST_JOB_STATUS_KEY)
+    settings_db.upsert({"key": LAST_JOB_MESSAGE_KEY, "value": message}, Setting.key == LAST_JOB_MESSAGE_KEY)
+
+
+def get_job_status() -> dict[str, str]:
+    def _setting_value(key: str) -> str:
+        record = settings_db.get(Setting.key == key)
+        return str(record.get("value") or "") if record else ""
+
+    return {
+        "last_started": _setting_value(LAST_JOB_STARTED_KEY),
+        "last_completed": _setting_value(LAST_JOB_COMPLETED_KEY),
+        "last_reason": _setting_value(LAST_JOB_REASON_KEY),
+        "last_status": _setting_value(LAST_JOB_STATUS_KEY),
+        "last_message": _setting_value(LAST_JOB_MESSAGE_KEY),
+    }
 
 
 def should_run_watch_status_check() -> bool:
@@ -1463,6 +1498,8 @@ def main():
     seer_requests = get_overseerr_requests()
     debug_emails_sent = 0
     new_request_metadata_lookups = 0
+    seerr_inserted_count = 0
+    seerr_updated_count = 0
     # print(f"seer_requests:")
     # print(seer_requests)
 
@@ -1485,6 +1522,7 @@ def main():
                 updates["requestedSeasons"] = requested_seasons
             if updates:
                 request_db.update(updates, Request.id == request_id)
+                seerr_updated_count += 1
                 logger.info(
                     "Updated Seerr request %s with request-level availability metadata: %s",
                     request_id,
@@ -1556,6 +1594,14 @@ def main():
                 'eligible_for_email': False,
                 'title': title
             })
+            seerr_inserted_count += 1
+
+    logger.info(
+        "Seerr scan summary: fetched=%s inserted=%s updated=%s.",
+        len(seer_requests),
+        seerr_inserted_count,
+        seerr_updated_count,
+    )
 
     # Ensure email user records exist for any legacy requests
     for existing_request in request_db.all():

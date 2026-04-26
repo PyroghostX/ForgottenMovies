@@ -3,6 +3,16 @@
 {% block content %}
 <div class="card">
     <h2>Scheduler</h2>
+    <p class="help-text">
+        Last job:
+        {% if job_status.last_started %}
+            {{ job_status.last_reason or "unknown" }} / {{ job_status.last_status or "unknown" }}
+            started {{ job_status.last_started }}
+            {% if job_status.last_completed %}and completed {{ job_status.last_completed }}{% endif %}
+        {% else %}
+            No job has been recorded since this status tracker was added.
+        {% endif %}
+    </p>
     <form method="post" action="{{ url_for('settings') }}">
         <label class="toggle-switch">
             <input type="checkbox" name="scheduler_disabled" {% if scheduler_disabled %}checked{% endif %}>

@@ -7,6 +7,8 @@ from forgotten_movies import (
     DATA_DIR,
     flush_log_handlers,
     logger as forgotten_logger,
+    mark_job_completed,
+    mark_job_started,
     main as run_forgotten_movies_job,
 )
 
@@ -19,11 +21,14 @@ def execute_job(reason: str) -> None:
     Run the Forgotten Movies workflow and ensure logs are flushed afterward.
     """
     forgotten_logger.info("Forgotten Movies job triggered (%s).", reason)
+    mark_job_started(reason)
     try:
         run_forgotten_movies_job()
         forgotten_logger.info("Forgotten Movies job completed (%s).", reason)
+        mark_job_completed(reason, "success")
     except Exception:  # pragma: no cover - defensive logging
         forgotten_logger.exception("Forgotten Movies job raised an exception (%s).", reason)
+        mark_job_completed(reason, "failed", "See logs for details.")
     finally:
         flush_log_handlers()
 

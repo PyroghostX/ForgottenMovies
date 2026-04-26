@@ -24,6 +24,7 @@ from forgotten_movies import (
     check_unwatched_emails_status,
     flush_log_handlers,
     get_email_user,
+    get_job_status,
     get_log_level,
     get_overseerr_requests,
     get_overseerr_requests_page,
@@ -646,6 +647,7 @@ def settings():
         "settings.html",
         page_title="Settings",
         scheduler_disabled=is_scheduler_disabled(),
+        job_status=get_job_status(),
         messages=get_flashed_messages(with_categories=True),
         current_year=time.strftime("%Y"),
     )
