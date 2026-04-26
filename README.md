@@ -33,6 +33,10 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Seer for re
 </p>
 
 <p align="center">
+  <img src="files/screenshot_stats.png" alt="Screenshot Stats" width="788">
+</p>
+
+<p align="center">
   <img src="files/screenshot_website_2.png" alt="Screenshot Website" width="788">
 </p>
 
