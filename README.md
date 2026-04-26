@@ -8,6 +8,7 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Seer for re
 - **Automated reminders:** Periodically scan Seer, cross-reference Tautulli history, and sends emails via SMTP to the original requester.
 - **Custom email template:** Default ships to `/app/data/email_template_original.html`; add `/app/data/email_template.html` to override while still receiving upstream updates.
 - **Dashboard:** Kick off manual runs, review the upcoming reminder queue, see recently sent reminders, and manage unsubscribed addresses.
+- **Stats:** See the numbers of who requests stuff and who actually watches it.
 - **Self-service unsubscribe (optional):** Let users unsubscribe themselves via encrypted links in emails instead of managing the list manually. Works with any reverse proxy setup.
 - **Scheduler toggle:** Temporarily pause automated API calls and emails from the settings page.
 - **Docker ready:** Single-container deployment with persistent TinyDB data, logs, and template files.
@@ -17,7 +18,7 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Seer for re
 
 - Plex Media Server
 - Tautulli
-- Seer (Overseerr or Jellyseerr). Important: make sure the "Web App URL" is set on your Seer Plex settings page.
+- Seerr. Important: make sure the "Web App URL" is set on your Seerr Plex settings page.
 - SMTP email so Forgotten Movies can send reminder emails (other methods built out later).
 - TheMovieDB API key (optional but recommended) if you want poster artwork in the reminders.
 
@@ -29,7 +30,7 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Seer for re
 </p>
 
 <p align="center">
-  <img src="files/screenshot_website.png" alt="Screenshot Website" width="788">
+  <img src="files/screenshot_websitev2.png" alt="Screenshot Website" width="788">
 </p>
 
 <p align="center">
