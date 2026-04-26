@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block body_class %} class="public-page"{% endblock %}
+
+{% block content %}
+<div class="public-container">
+    {% if success %}
+        <div class="icon success">✓</div>
+        <h1 class="success">{{ page_title }}</h1>
+    {% else %}
+        <div class="icon error">✗</div>
+        <h1 class="error">{{ page_title }}</h1>
+    {% endif %}
+
+    <div class="public-message">{{ message }}</div>
+
+    {% if email %}
+        <div class="email-info">Email: <strong>{{ email }}</strong></div>
+    {% endif %}
+
+    {% if success %}
+    <div class="info-section">
+        <p>You'll continue receiving reminders about unwatched content you requested.</p>
+    </div>
+    {% endif %}
+
+    <div class="public-footer">
+        Forgotten Movies
+    </div>
+</div>
+{% endblock %}

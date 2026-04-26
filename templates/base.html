@@ -294,10 +294,98 @@
             font-size: 0.9rem;
             color: #777;
         }
+        /* Public page styles (unsubscribe/resubscribe pages) */
+        body.public-page .site-header { display: none; }
+        body.public-page main {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+        }
+        body.public-page .page-title { display: none; }
+        .public-container {
+            max-width: 600px;
+            width: 100%;
+            background: linear-gradient(135deg, #1e1e2f 0%, #24243e 100%);
+            border-radius: 12px;
+            padding: 3rem 2rem;
+            text-align: center;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+        }
+        .public-container .icon {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+        }
+        .public-container .icon.success { color: #4fc3f7; }
+        .public-container .icon.error { color: #e53935; }
+        .public-container .icon.warning { color: #ff9800; }
+        .public-container h1 {
+            margin: 0 0 1.5rem;
+            font-size: 1.8rem;
+        }
+        .public-container h1.success { color: #4fc3f7; }
+        .public-container h1.error { color: #e53935; }
+        .public-container h1.warning { color: #ff9800; }
+        .public-message {
+            font-size: 1.1rem;
+            line-height: 1.6;
+            margin: 1.5rem 0;
+            color: #c5cae9;
+        }
+        .email-info {
+            color: #9e9e9e;
+            font-size: 0.9rem;
+            margin: 1.5rem 0;
+        }
+        .email-info strong { color: #f5f5f5; }
+        .confirm-button {
+            padding: 0.8rem 2rem;
+            font-size: 1rem;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: background-color 0.2s ease-in-out;
+            margin-top: 1rem;
+        }
+        .confirm-button.primary {
+            background-color: #3f51b5;
+        }
+        .confirm-button.primary:hover { background-color: #5c6bc0; }
+        .confirm-button.danger {
+            background-color: #e53935;
+        }
+        .confirm-button.danger:hover { background-color: #ef5350; }
+        .info-section {
+            margin-top: 2.5rem;
+            padding-top: 2rem;
+            border-top: 1px solid #424245;
+        }
+        .info-section p {
+            font-size: 0.95rem;
+            color: #c5cae9;
+            margin: 0;
+        }
+        .public-footer {
+            margin-top: 2rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid #424245;
+            font-size: 0.85rem;
+            color: #757575;
+        }
+        .resubscribe-link {
+            display: inline-block;
+            margin-top: 1.5rem;
+            color: #4fc3f7;
+            text-decoration: none;
+            font-weight: 600;
+        }
+        .resubscribe-link:hover { text-decoration: underline; }
     </style>
     {% block extra_head %}{% endblock %}
 </head>
-<body>
+<body{% block body_class %}{% endblock %}>
     <header class="site-header">
         <div class="brand">
             <img class="brand-logo" src="{{ url_for('asset', filename='logo.png') }}" alt="Forgotten Movies logo">
