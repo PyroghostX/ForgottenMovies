@@ -56,6 +56,7 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Seerr for r
 | `ADMIN_NAME` | Shown in reminder copy so recipients know who to contact. |
 | `OVERSEERR_NUM_OF_HISTORY_RECORDS` | Number of Seerr entries fetched per scan (default 10). |
 | `TAUTULLI_NEW_REQUEST_METADATA_LIMIT` | Maximum new Seerr requests per run that can ask Tautulli for title metadata when Seerr did not provide a title (default 50). |
+| `TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT` | Maximum existing unknown-title requests per run that can ask Tautulli for title metadata/watch history (default 30). |
 | `DAYS_SINCE_REQUEST`, `DAYS_SINCE_REQUEST_EMAIL_TEXT` | Minimum days since request fulfillment before a reminder is sent (default 90) and the human-readable text used in the email template (default `"3 months"`). |
 | `HOURS_BETWEEN_EMAILS` | Cooldown window per recipient (default 24 hours). |
 | `REQUEST_URL` | Link back to your request portal (used in the email footer). |

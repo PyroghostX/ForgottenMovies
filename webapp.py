@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from datetime import datetime
 from threading import Thread
 
@@ -37,8 +38,10 @@ from forgotten_movies import (
     remove_unsubscribed_email,
     request_db,
     Request,
+    refresh_metadata_for_recent_unknowns,
     set_scheduler_disabled,
     set_log_level,
+    TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT,
     _attempt_send_request,
     DEBUG_MODE,
     UNSUBSCRIBE_ENABLED,
@@ -51,6 +54,7 @@ from job_runner import acquire_job_lock, execute_job
 
 APP_LOGGER = logging.getLogger("ForgottenMoviesWeb")
 APP_LOGGER.setLevel(logging.INFO)
+BACKGROUND_TASKS: dict[str, dict[str, str]] = {}
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-me")
@@ -168,6 +172,59 @@ def _request_wants_json() -> bool:
     return best == "application/json"
 
 
+def _json_or_flash(payload: dict, redirect_endpoint: str = "settings"):
+    if _request_wants_json():
+        status = int(payload.pop("_status", 200))
+        return jsonify(payload), status
+    category = payload.get("category") or ("success" if payload.get("ok") else "error")
+    flash(payload.get("message") or "Action started.", category)
+    return redirect(url_for(redirect_endpoint))
+
+
+def _start_background_task(name: str, task_func) -> dict:
+    task_id = uuid.uuid4().hex
+    BACKGROUND_TASKS[task_id] = {
+        "id": task_id,
+        "name": name,
+        "status": "running",
+        "message": f"{name} is running. View the logs for details.",
+        "category": "info",
+    }
+
+    def _target():
+        try:
+            message = task_func()
+            BACKGROUND_TASKS[task_id].update(
+                {
+                    "status": "complete",
+                    "message": message or f"{name} complete.",
+                    "category": "success",
+                }
+            )
+        except Exception as exc:
+            APP_LOGGER.exception("%s failed: %s", name, exc)
+            BACKGROUND_TASKS[task_id].update(
+                {
+                    "status": "failed",
+                    "message": f"{name} failed: {exc}",
+                    "category": "error",
+                }
+            )
+
+    Thread(
+        target=_target,
+        name=f"forgotten-movies-task-{task_id}",
+        daemon=True,
+    ).start()
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "status": "running",
+        "category": "info",
+        "message": f"{name} is running. View the logs for details.",
+    }
+
+
 def trigger_job(reason: str, async_run: bool) -> tuple[bool, str]:
     try:
         lock = acquire_job_lock(timeout=0.0)
@@ -192,6 +249,18 @@ def trigger_job(reason: str, async_run: bool) -> tuple[bool, str]:
 
     _target(lock)
     return True, "Job started."
+
+
+def _run_with_job_lock(action_name: str, callback) -> str:
+    try:
+        lock = acquire_job_lock(timeout=0.0)
+    except Timeout:
+        APP_LOGGER.info("%s skipped; another job is already running.", action_name)
+        return "Another job is already running. View the logs for details."
+    try:
+        return callback()
+    finally:
+        lock.release()
 
 
 def _format_unsubscribe_records(records):
@@ -565,10 +634,26 @@ def resubscribe_via_link(token: str):
 @app.route("/run-now", methods=["POST"])
 def run_now():
     success, msg = trigger_job("manual", async_run=True)
-    flash(msg, "success" if success else "info")
+    payload = {
+        "ok": success,
+        "status": "running" if success else "busy",
+        "category": "info" if success else "warning",
+        "message": "Job started. View the logs for details." if success else msg,
+    }
+    if _request_wants_json():
+        return jsonify(payload), 202 if success else 409
+    flash(payload["message"], payload["category"])
     if request.form.get("next") == "settings":
         return redirect(url_for("settings"))
     return redirect(url_for("index"))
+
+
+@app.route("/settings/task-status/<task_id>", methods=["GET"])
+def settings_task_status(task_id: str):
+    task = BACKGROUND_TASKS.get(task_id)
+    if not task:
+        return jsonify({"ok": False, "status": "unknown", "message": "Task status is no longer available."}), 404
+    return jsonify({"ok": task["status"] != "failed", **task})
 
 
 @app.route("/health", methods=["GET"])
@@ -656,14 +741,36 @@ def settings():
 @app.route("/settings/update-watch-status", methods=["POST"])
 def update_watch_status():
     APP_LOGGER.info("Manual action: update watch status requested")
-    try:
+    def _task():
         stats = check_unwatched_emails_status()
-        msg = f"Watch status check complete: {stats['checked']} checked, {stats['watched']} watched, {stats['failed']} failed."
-        flash(msg, "success")
-    except Exception as exc:
-        APP_LOGGER.exception("Watch status check failed: %s", exc)
-        flash(f"Watch status check failed: {exc}", "error")
-    return redirect(url_for("settings"))
+        return (
+            f"Watch status check complete: {stats['checked']} requester checks, "
+            f"{stats['watched']} requester watched, {stats.get('media_checked', 0)} media checks, "
+            f"{stats.get('media_watched', 0)} watched by anyone, {stats['failed']} failed."
+        )
+
+    payload = _start_background_task(
+        "Watch status check",
+        lambda: _run_with_job_lock("Watch status check", _task),
+    )
+    return _json_or_flash(payload)
+
+
+@app.route("/settings/refresh-unknown-metadata", methods=["POST"])
+def refresh_unknown_metadata():
+    APP_LOGGER.info("Manual action: recent unknown metadata refresh requested")
+    def _task():
+        updates = refresh_metadata_for_recent_unknowns(
+            limit=TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT,
+            pool_size=max(50, TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT),
+        )
+        return f"Recent unknown metadata refresh complete: {len(updates)} title(s) updated."
+
+    payload = _start_background_task(
+        "Recent unknown metadata refresh",
+        lambda: _run_with_job_lock("Recent unknown metadata refresh", _task),
+    )
+    return _json_or_flash(payload)
 
 
 @app.route("/settings/log-seerr-payload", methods=["POST"])

@@ -504,8 +504,12 @@
             <strong>{{ stats_summary.total_requests }}</strong>
         </div>
         <div class="summary-stat">
-            <span>Watched</span>
+            <span>Watched by Requestor</span>
             <strong>{{ stats_summary.total_watched }} ({{ stats_summary.total_watched_percent }}%)</strong>
+        </div>
+        <div class="summary-stat">
+            <span>Watched By Anyone</span>
+            <strong>{{ stats_summary.total_media_watched }} ({{ stats_summary.total_media_watched_percent }}%)</strong>
         </div>
         <div class="summary-stat">
             <span>Not Watched</span>

@@ -1,5 +1,31 @@
 {% extends "base.html" %}
 
+{% block extra_head %}
+<style>
+    .settings-toast-container {
+        position: fixed;
+        top: 5.25rem;
+        left: 50%;
+        transform: translateX(-50%);
+        width: min(560px, calc(100vw - 2rem));
+        z-index: 2200;
+        display: grid;
+        gap: 0.65rem;
+        pointer-events: none;
+    }
+    .settings-toast-container .message {
+        margin: 0;
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+        pointer-events: auto;
+    }
+    @media (max-width: 720px) {
+        .settings-toast-container {
+            top: 4.75rem;
+        }
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="card">
     <h2>Scheduler</h2>
@@ -32,7 +58,7 @@
     <p class="help-text">
         This checks Seerr for new requests, checks Tautulli for unwatched old requests, and sends any eligible reminder emails.
     </p>
-    <form method="post" action="{{ url_for('run_now') }}">
+    <form method="post" action="{{ url_for('run_now') }}" data-async-action data-running-message="Job started. View the logs for details.">
         <input type="hidden" name="next" value="settings">
         <button type="submit">Run Job Now</button>
     </form>
@@ -45,8 +71,19 @@
         This checks all unwatched sent emails against Tautulli to see if users have watched the content.
         This happens automatically during scheduled runs, but you can trigger it manually here.
     </p>
-    <form method="post" action="{{ url_for('update_watch_status') }}">
+    <form method="post" action="{{ url_for('update_watch_status') }}" data-async-action data-running-message="Watch status check is running. View the logs for details.">
         <button type="submit">Check Watch Status Now</button>
+    </form>
+</div>
+
+<div class="card">
+    <h2>Refresh Unknown Metadata</h2>
+    <p>Ask Tautulli to fill in recent requests that still have unknown titles.</p>
+    <p class="help-text">
+        This runs the recent unknown metadata refresh only, using TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT.
+    </p>
+    <form method="post" action="{{ url_for('refresh_unknown_metadata') }}" data-async-action data-running-message="Recent unknown metadata refresh is running. View the logs for details.">
+        <button type="submit">Refresh Unknown Metadata Now</button>
     </form>
 </div>
 
@@ -80,4 +117,90 @@
     </p>
     <p><a href="{{ url_for('view_logs') }}" style="color:#c5cae9; font-weight:700;">Open Logs</a></p>
 </div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    (function() {
+        const forms = Array.from(document.querySelectorAll("form[data-async-action]"));
+        if (forms.length === 0) { return; }
+
+        function flash(message, category) {
+            let container = document.getElementById("settings-toast-container");
+            if (!container) {
+                container = document.createElement("div");
+                container.id = "settings-toast-container";
+                container.className = "settings-toast-container";
+                document.body.appendChild(container);
+            }
+            const item = document.createElement("div");
+            item.className = `message ${category || "info"}`;
+            const text = document.createElement("span");
+            text.textContent = message;
+            const close = document.createElement("button");
+            close.type = "button";
+            close.className = "close-btn";
+            close.setAttribute("aria-label", "Dismiss");
+            close.textContent = "x";
+            close.addEventListener("click", () => item.remove());
+            item.appendChild(text);
+            item.appendChild(close);
+            container.prepend(item);
+            setTimeout(() => item.remove(), 10000);
+        }
+
+        function pollTask(taskId) {
+            if (!taskId) { return; }
+            const url = "{{ url_for('settings_task_status', task_id='__TASK_ID__') }}".replace("__TASK_ID__", taskId);
+            const poll = () => {
+                fetch(url, { headers: { "Accept": "application/json", "X-Requested-With": "fetch" } })
+                    .then((response) => response.json().then((data) => ({ ok: response.ok, data })))
+                    .then(({ data }) => {
+                        if (data.status === "running") {
+                            setTimeout(poll, 2500);
+                            return;
+                        }
+                        flash(data.message || "Action complete.", data.category || (data.ok ? "success" : "error"));
+                    })
+                    .catch(() => {
+                        flash("Unable to read task status. View the logs for details.", "error");
+                    });
+            };
+            setTimeout(poll, 2500);
+        }
+
+        forms.forEach((form) => {
+            form.addEventListener("submit", (event) => {
+                event.preventDefault();
+                const button = form.querySelector("button[type='submit']");
+                if (button) {
+                    button.disabled = true;
+                }
+                fetch(form.action, {
+                    method: "POST",
+                    body: new FormData(form),
+                    headers: {
+                        "Accept": "application/json",
+                        "X-Requested-With": "fetch"
+                    }
+                })
+                    .then((response) => response.json().then((data) => ({ ok: response.ok, data })))
+                    .then(({ ok, data }) => {
+                        flash(data.message || form.dataset.runningMessage || "Action started.", data.category || (ok ? "info" : "error"));
+                        if (data.task_id) {
+                            pollTask(data.task_id);
+                        }
+                    })
+                    .catch(() => {
+                        flash("Unable to start action. View the logs for details.", "error");
+                    })
+                    .finally(() => {
+                        if (button) {
+                            button.disabled = false;
+                        }
+                    });
+            });
+        });
+    })();
+</script>
 {% endblock %}

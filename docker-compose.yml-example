@@ -13,6 +13,7 @@ services:
       - OVERSEERR_API_KEY=YOUR_KEY
       - OVERSEERR_NUM_OF_HISTORY_RECORDS=200 #Set this to how many requests to pull from Seerr, base it on how many youve gotten in the last 3-4 months.
       - TAUTULLI_NEW_REQUEST_METADATA_LIMIT=50 #Max new requests per run that can ask Tautulli for missing title metadata.
+      - TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT=30 #Max existing unknown-title requests per run that can ask Tautulli for metadata/watch history.
       - REQUEST_URL=https://request.example.com
       - THEMOVIEDB_API_KEY=YOUR_KEY
       - SMTP_SERVER=smtp.gmail.com

@@ -21,7 +21,7 @@
     }
     .stat-card .value {
         display: block;
-        font-size: 2rem;
+        font-size: 1.6rem;
         font-weight: 800;
         margin-top: 0.35rem;
     }
@@ -479,7 +479,7 @@
         position: absolute;
         left: 0;
         bottom: 130%;
-        width: min(260px, calc(100vw - 40px));
+        width: min(340px, calc(100vw - 40px));
         background: #2a2a2a;
         color: #f5f5f5;
         border: 1px solid #555;
@@ -760,8 +760,12 @@
         <span class="value">{{ stats.total_requests }}</span>
     </div>
     <div class="stat-card">
-        <span class="label">Watched</span>
+        <span class="label">Watched by Requestor</span>
         <span class="value">{{ stats.total_watched }} ({{ stats.total_watched_percent }}%)</span>
+    </div>
+    <div class="stat-card">
+        <span class="label">Watched By Anyone</span>
+        <span class="value">{{ stats.total_media_watched }} ({{ stats.total_media_watched_percent }}%)</span>
     </div>
     <div class="stat-card">
         <span class="label">Not Watched</span>

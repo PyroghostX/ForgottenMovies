@@ -7,7 +7,9 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.utils import formatdate, make_msgid
 from datetime import datetime, timedelta
+from json import JSONDecodeError
 from logging.handlers import RotatingFileHandler
+from filelock import FileLock
 from threading import RLock
 from tinydb import TinyDB, Query
 from tinydb.table import Document
@@ -47,6 +49,7 @@ DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
 DEBUG_EMAIL = os.getenv("DEBUG_EMAIL")
 DEBUG_MAX_EMAILS = int(os.getenv("DEBUG_MAX_EMAILS", 2))
 TAUTULLI_NEW_REQUEST_METADATA_LIMIT = int(os.getenv("TAUTULLI_NEW_REQUEST_METADATA_LIMIT", 50))
+TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT = int(os.getenv("TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT", 30))
 JOB_INTERVAL_SECONDS = int(os.getenv("JOB_INTERVAL_SECONDS", 600))
 
 # Optional self-service unsubscribe feature
@@ -238,7 +241,9 @@ def flush_log_handlers() -> None:
 request_db = TinyDB(os.path.join(DATA_DIR, "request_data.json"))
 email_db = TinyDB(os.path.join(DATA_DIR, "email_data.json"))
 email_users_db = TinyDB(os.path.join(DATA_DIR, "email_users.json"))
-settings_db = TinyDB(os.path.join(DATA_DIR, "settings.json"))
+SETTINGS_DB_PATH = os.path.join(DATA_DIR, "settings.json")
+settings_db = TinyDB(SETTINGS_DB_PATH)
+SETTINGS_LOCK_PATH = os.path.join(DATA_DIR, "settings.lock")
 
 Movie = Query()
 Email = Query()
@@ -246,6 +251,37 @@ Request = Query()
 Setting = Query()
 EmailUser = Query()
 EMAIL_USER_LOCK = RLock()
+SETTINGS_LOCK = RLock()
+
+
+def _settings_file_lock() -> FileLock:
+    return FileLock(SETTINGS_LOCK_PATH, thread_local=False)
+
+
+def _recover_settings_db_from_corruption(exc: JSONDecodeError) -> None:
+    global settings_db
+    backup_path = f"{SETTINGS_DB_PATH}.corrupt-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    logger.error("Settings database is invalid JSON; backing it up to %s: %s", backup_path, exc)
+    try:
+        settings_db.close()
+    except Exception:
+        pass
+    if os.path.exists(SETTINGS_DB_PATH):
+        shutil.copy2(SETTINGS_DB_PATH, backup_path)
+    with open(SETTINGS_DB_PATH, "w", encoding="utf-8") as handle:
+        handle.write('{"_default": {}}')
+    settings_db = TinyDB(SETTINGS_DB_PATH)
+    settings_db.insert({"key": SCHEDULER_DISABLED_KEY, "value": DEFAULT_SCHEDULER_DISABLED})
+
+
+def _with_settings_lock(callback, default=None):
+    with SETTINGS_LOCK:
+        with _settings_file_lock():
+            try:
+                return callback()
+            except JSONDecodeError as exc:
+                _recover_settings_db_from_corruption(exc)
+                return default
 
 
 def _stable_doc_id(email: str) -> int:
@@ -298,22 +334,36 @@ LAST_JOB_REASON_KEY = "last_job_reason"
 LAST_JOB_STATUS_KEY = "last_job_status"
 LAST_JOB_MESSAGE_KEY = "last_job_message"
 
-if not settings_db.contains(Setting.key == SCHEDULER_DISABLED_KEY):
-    settings_db.insert({"key": SCHEDULER_DISABLED_KEY, "value": DEFAULT_SCHEDULER_DISABLED})
+def _ensure_default_settings() -> None:
+    with SETTINGS_LOCK:
+        with _settings_file_lock():
+            try:
+                if not settings_db.contains(Setting.key == SCHEDULER_DISABLED_KEY):
+                    settings_db.insert({"key": SCHEDULER_DISABLED_KEY, "value": DEFAULT_SCHEDULER_DISABLED})
+            except JSONDecodeError as exc:
+                _recover_settings_db_from_corruption(exc)
+
+
+_ensure_default_settings()
 
 
 def is_scheduler_disabled() -> bool:
-    record = settings_db.get(Setting.key == SCHEDULER_DISABLED_KEY)
+    record = _with_settings_lock(lambda: settings_db.get(Setting.key == SCHEDULER_DISABLED_KEY))
     return bool(record and record.get("value"))
 
 
 def set_scheduler_disabled(value: bool) -> None:
-    settings_db.upsert({"key": SCHEDULER_DISABLED_KEY, "value": bool(value)}, Setting.key == SCHEDULER_DISABLED_KEY)
+    _with_settings_lock(
+        lambda: settings_db.upsert(
+            {"key": SCHEDULER_DISABLED_KEY, "value": bool(value)},
+            Setting.key == SCHEDULER_DISABLED_KEY,
+        )
+    )
 
 
 def get_last_watch_status_check() -> datetime | None:
     """Get the timestamp of the last watch status check."""
-    record = settings_db.get(Setting.key == LAST_WATCH_STATUS_CHECK_KEY)
+    record = _with_settings_lock(lambda: settings_db.get(Setting.key == LAST_WATCH_STATUS_CHECK_KEY))
     if record and record.get("value"):
         return _parse_iso(record.get("value"))
     return None
@@ -321,26 +371,34 @@ def get_last_watch_status_check() -> datetime | None:
 
 def set_last_watch_status_check(timestamp: datetime) -> None:
     """Set the timestamp of the last watch status check."""
-    settings_db.upsert(
-        {"key": LAST_WATCH_STATUS_CHECK_KEY, "value": timestamp.isoformat()},
-        Setting.key == LAST_WATCH_STATUS_CHECK_KEY
+    _with_settings_lock(
+        lambda: settings_db.upsert(
+            {"key": LAST_WATCH_STATUS_CHECK_KEY, "value": timestamp.isoformat()},
+            Setting.key == LAST_WATCH_STATUS_CHECK_KEY,
+        )
     )
 
 
 def mark_job_started(reason: str, timestamp: datetime | None = None) -> None:
     timestamp = timestamp or datetime.now()
-    settings_db.upsert({"key": LAST_JOB_STARTED_KEY, "value": timestamp.isoformat()}, Setting.key == LAST_JOB_STARTED_KEY)
-    settings_db.upsert({"key": LAST_JOB_REASON_KEY, "value": reason}, Setting.key == LAST_JOB_REASON_KEY)
-    settings_db.upsert({"key": LAST_JOB_STATUS_KEY, "value": "running"}, Setting.key == LAST_JOB_STATUS_KEY)
-    settings_db.upsert({"key": LAST_JOB_MESSAGE_KEY, "value": ""}, Setting.key == LAST_JOB_MESSAGE_KEY)
+    def _update():
+        settings_db.upsert({"key": LAST_JOB_STARTED_KEY, "value": timestamp.isoformat()}, Setting.key == LAST_JOB_STARTED_KEY)
+        settings_db.upsert({"key": LAST_JOB_REASON_KEY, "value": reason}, Setting.key == LAST_JOB_REASON_KEY)
+        settings_db.upsert({"key": LAST_JOB_STATUS_KEY, "value": "running"}, Setting.key == LAST_JOB_STATUS_KEY)
+        settings_db.upsert({"key": LAST_JOB_MESSAGE_KEY, "value": ""}, Setting.key == LAST_JOB_MESSAGE_KEY)
+
+    _with_settings_lock(_update)
 
 
 def mark_job_completed(reason: str, status: str, message: str = "", timestamp: datetime | None = None) -> None:
     timestamp = timestamp or datetime.now()
-    settings_db.upsert({"key": LAST_JOB_COMPLETED_KEY, "value": timestamp.isoformat()}, Setting.key == LAST_JOB_COMPLETED_KEY)
-    settings_db.upsert({"key": LAST_JOB_REASON_KEY, "value": reason}, Setting.key == LAST_JOB_REASON_KEY)
-    settings_db.upsert({"key": LAST_JOB_STATUS_KEY, "value": status}, Setting.key == LAST_JOB_STATUS_KEY)
-    settings_db.upsert({"key": LAST_JOB_MESSAGE_KEY, "value": message}, Setting.key == LAST_JOB_MESSAGE_KEY)
+    def _update():
+        settings_db.upsert({"key": LAST_JOB_COMPLETED_KEY, "value": timestamp.isoformat()}, Setting.key == LAST_JOB_COMPLETED_KEY)
+        settings_db.upsert({"key": LAST_JOB_REASON_KEY, "value": reason}, Setting.key == LAST_JOB_REASON_KEY)
+        settings_db.upsert({"key": LAST_JOB_STATUS_KEY, "value": status}, Setting.key == LAST_JOB_STATUS_KEY)
+        settings_db.upsert({"key": LAST_JOB_MESSAGE_KEY, "value": message}, Setting.key == LAST_JOB_MESSAGE_KEY)
+
+    _with_settings_lock(_update)
 
 
 def get_job_status() -> dict[str, str]:
@@ -348,13 +406,22 @@ def get_job_status() -> dict[str, str]:
         record = settings_db.get(Setting.key == key)
         return str(record.get("value") or "") if record else ""
 
-    return {
-        "last_started": _setting_value(LAST_JOB_STARTED_KEY),
-        "last_completed": _setting_value(LAST_JOB_COMPLETED_KEY),
-        "last_reason": _setting_value(LAST_JOB_REASON_KEY),
-        "last_status": _setting_value(LAST_JOB_STATUS_KEY),
-        "last_message": _setting_value(LAST_JOB_MESSAGE_KEY),
-    }
+    return _with_settings_lock(
+        lambda: {
+            "last_started": _setting_value(LAST_JOB_STARTED_KEY),
+            "last_completed": _setting_value(LAST_JOB_COMPLETED_KEY),
+            "last_reason": _setting_value(LAST_JOB_REASON_KEY),
+            "last_status": _setting_value(LAST_JOB_STATUS_KEY),
+            "last_message": _setting_value(LAST_JOB_MESSAGE_KEY),
+        },
+        default={
+            "last_started": "",
+            "last_completed": "",
+            "last_reason": "",
+            "last_status": "settings_error",
+            "last_message": "Settings data could not be read. Check logs.",
+        },
+    )
 
 
 def should_run_watch_status_check() -> bool:
@@ -608,6 +675,44 @@ def _date_in_range(value: datetime, start_dt: datetime | None, end_dt: datetime 
     return True
 
 
+def _media_identity_keys(rec: dict) -> set[tuple[str, str]]:
+    keys = set()
+    rating_key = rec.get("ratingkey") or rec.get("rating_key")
+    tmdb_id = rec.get("tmdbId")
+    if rating_key not in (None, ""):
+        keys.add(("rating", str(rating_key)))
+    if tmdb_id not in (None, ""):
+        keys.add(("tmdb", str(tmdb_id)))
+    return keys
+
+
+def _watch_history_timestamp(history_record: dict | None) -> str:
+    if not history_record:
+        return datetime.now().isoformat()
+    watch_timestamp = history_record.get('stopped') or history_record.get('date')
+    if watch_timestamp:
+        try:
+            return datetime.fromtimestamp(int(watch_timestamp)).isoformat()
+        except (ValueError, TypeError):
+            logger.warning("Invalid timestamp from Tautulli: %s", watch_timestamp)
+    return datetime.now().isoformat()
+
+
+def _mark_media_watched(record: dict, watched_at: str) -> int:
+    media_keys = _media_identity_keys(record)
+    if not media_keys:
+        return 0
+    matching_doc_ids = [
+        rec.doc_id
+        for rec in request_db.all()
+        if _media_identity_keys(rec) & media_keys
+    ]
+    if not matching_doc_ids:
+        return 0
+    request_db.update({"media_watched_date": watched_at}, doc_ids=matching_doc_ids)
+    return len(matching_doc_ids)
+
+
 def _extract_seer_title(request: dict, media: dict) -> str:
     candidates = (
         media.get("title"),
@@ -649,10 +754,16 @@ def get_user_stats(
     oldest_request_dt = datetime.min
 
     email_records = email_db.all()
+    watched_media_keys: set[tuple[str, str]] = set()
+    for rec in all_request_records:
+        if rec.get("media_watched_date"):
+            watched_media_keys.update(_media_identity_keys(rec))
+
     ranged_email_records = []
     email_records_by_key: dict[tuple[str, str], dict] = {}
     email_records_by_rating: dict[tuple[str, str], dict] = {}
     reminder_stats_by_email: dict[str, dict[str, int]] = {}
+    total_media_watched = 0
     for rec in email_records:
         email_value = (rec.get("email") or "").strip().lower()
         tmdb_id = str(rec.get("tmdbId") or "")
@@ -685,6 +796,9 @@ def get_user_stats(
         user_key = email_value or plex_username.lower()
         if not user_key:
             continue
+        media_watched_by_anyone = bool(_media_identity_keys(rec) & watched_media_keys)
+        if media_watched_by_anyone:
+            total_media_watched += 1
 
         user = users.setdefault(
             user_key,
@@ -815,6 +929,10 @@ def get_user_stats(
         "total_not_watched_percent": round((total_not_watched / total_requests) * 100) if total_requests else 0,
         "total_watched": total_watched,
         "total_watched_percent": round((total_watched / total_requests) * 100) if total_requests else 0,
+        "total_media_watched": total_media_watched,
+        "total_media_watched_percent": round((total_media_watched / total_requests) * 100)
+        if total_requests
+        else 0,
         "total_pending": sum(item["pending_count"] for item in summaries),
         "total_skipped": sum(item["skipped_count"] for item in summaries),
         "total_reminders_sent": total_reminders_sent,
@@ -840,7 +958,7 @@ def check_unwatched_emails_status() -> dict[str, int]:
     # Record the timestamp of this check
     set_last_watch_status_check(datetime.now())
 
-    stats = {"checked": 0, "watched": 0, "failed": 0}
+    stats = {"checked": 0, "watched": 0, "failed": 0, "media_checked": 0, "media_watched": 0}
 
     unwatched_emails = [rec for rec in email_db.all() if not rec.get("date_watched")]
 
@@ -860,26 +978,14 @@ def check_unwatched_emails_status() -> dict[str, int]:
         try:
             watch_history = has_user_watched_media(plex_username, rating_key, media_type)
             if watch_history:
-                # Extract the actual watch date from Tautulli history
-                # Tautulli returns a timestamp in seconds, we need to convert to ISO format
                 watch_record = watch_history[0]
-                watch_timestamp = watch_record.get('stopped') or watch_record.get('date')
-
-                if watch_timestamp:
-                    try:
-                        watched_at = datetime.fromtimestamp(int(watch_timestamp)).isoformat()
-                    except (ValueError, TypeError):
-                        # Fallback to current time if timestamp is invalid
-                        logger.warning("Invalid timestamp from Tautulli for %s: %s", title, watch_timestamp)
-                        watched_at = datetime.now().isoformat()
-                else:
-                    # Fallback to current time if no timestamp available
-                    watched_at = datetime.now().isoformat()
+                watched_at = _watch_history_timestamp(watch_record)
 
                 email_db.update(
                     {"date_watched": watched_at},
                     (Email.email == email) & (Email.tmdbId == str(tmdb_id))
                 )
+                _mark_media_watched(rec, watched_at)
                 stats["watched"] += 1
                 logger.info(
                     "Marked %s (%s) as watched for %s on %s",
@@ -898,10 +1004,50 @@ def check_unwatched_emails_status() -> dict[str, int]:
                 exc,
             )
 
+    media_candidates: dict[tuple[str, str], dict] = {}
+    for rec in request_db.all():
+        if rec.get("media_watched_date"):
+            continue
+        rating_key = rec.get("ratingkey")
+        media_type = rec.get("mediaType")
+        if not rating_key or not media_type:
+            continue
+        media_candidates.setdefault((str(rating_key), str(media_type)), rec)
+
+    for rec in media_candidates.values():
+        stats["media_checked"] += 1
+        rating_key = rec.get("ratingkey")
+        media_type = rec.get("mediaType")
+        title = rec.get("title", "Unknown")
+        try:
+            watch_history = has_media_been_watched(rating_key, media_type)
+            if not watch_history:
+                continue
+            watched_at = _watch_history_timestamp(watch_history[0])
+            updated_count = _mark_media_watched(rec, watched_at)
+            stats["media_watched"] += 1
+            logger.info(
+                "Marked %s (%s) as watched by any user on %s across %d request(s)",
+                title,
+                rating_key,
+                watched_at,
+                updated_count,
+            )
+        except Exception as exc:
+            stats["failed"] += 1
+            logger.warning(
+                "Failed to check media-level watch status for %s (%s): %s",
+                title,
+                rating_key,
+                exc,
+            )
+
     logger.info(
-        "Watch status check complete: checked=%d, watched=%d, failed=%d",
+        "Watch status check complete: checked=%d, watched=%d, media_checked=%d, media_watched=%d, failed=%d",
         stats["checked"],
         stats["watched"],
+        stats["media_checked"],
+        stats["media_watched"],
         stats["failed"],
     )
     return stats
@@ -945,11 +1091,13 @@ def refresh_metadata_for_recent_unknowns(limit: int = 10, pool_size: int = 50) -
                 watch_history = []
             if watch_history:
                 title = watch_history[0].get("title", rec.get("title") or "Unknown")
+                watched_at = _watch_history_timestamp(watch_history[0])
                 updates[request_id] = title
                 request_db.update(
-                    {'title': title, 'tautulli_watch_date': datetime.now().isoformat()},
+                    {'title': title, 'tautulli_watch_date': watched_at},
                     Request.id == request_id,
                 )
+                _mark_media_watched(rec, watched_at)
                 continue
         try:
             metadata = get_tautulli_metadata(rating_key)
@@ -1060,6 +1208,26 @@ def has_user_watched_media(user, rating_key, media_type):
         logger.debug("watch_history: %s", watch_history)
         
     return watch_history
+
+
+def has_media_been_watched(rating_key, media_type):
+    params = {
+        'apikey': TAUTULLI_API_KEY,
+        'cmd': 'get_history',
+        'length': 1
+    }
+    if media_type == 'tv show':
+        params['grandparent_rating_key'] = rating_key
+    else:
+        params['rating_key'] = rating_key
+    response = requests.get(TAUTULLI_URL, params=params)
+    response.raise_for_status()
+    watch_history = response.json()['response']['data']['data']
+    if DEBUG_MODE:
+        logger.debug("media_watch_history: %s", watch_history)
+
+    return watch_history
+
 
 # Get metadata from Tautulli
 def get_tautulli_metadata(rating_key):
@@ -1233,7 +1401,9 @@ def _attempt_send_request(
     watch_history = has_user_watched_media(plex_username, rating_key, media_type)
     if watch_history:
         watched_title = watch_history[0].get('title', title)
-        request_db.update({'tautulli_watch_date': datetime.now().isoformat()}, Request.id == request_id)
+        watched_at = _watch_history_timestamp(watch_history[0])
+        request_db.update({'tautulli_watch_date': watched_at}, Request.id == request_id)
+        _mark_media_watched(record, watched_at)
         logger.info("Marking %s as watched for %s; no reminder sent.", watched_title, email_value)
         return SendOutcome(False, True, f"{watched_title} already appears watched; reminder not sent.", title, None, None)
 
@@ -1589,6 +1759,7 @@ def main():
                 'mobilePlexUrl': mobile_url,
                 'posterUrl': poster_url,
                 'tautulli_watch_date': None,
+                'media_watched_date': None,
                 'email_sent': False,
                 'skip_email': False,
                 'eligible_for_email': False,
@@ -1610,8 +1781,11 @@ def main():
             _ensure_email_user_record(existing_email)
 
     # Step 3: Refresh metadata for recent unknown titles
-    logger.info("Step 3: Update 10 recent titles from Tautulli")
-    metadata_updates = refresh_metadata_for_recent_unknowns(limit=10, pool_size=50)
+    logger.info("Step 3: Update %s recent titles from Tautulli", TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT)
+    metadata_updates = refresh_metadata_for_recent_unknowns(
+        limit=TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT,
+        pool_size=max(50, TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT),
+    )
 
     # Step 4: Evaluate reminders per user
     threshold_dt = datetime.now() - timedelta(days=DAYS_SINCE_REQUEST)
