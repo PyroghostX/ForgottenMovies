@@ -9,7 +9,7 @@
             Disable Scheduler (API calls and emails)
         </label>
         <p class="help-text">
-            When the scheduler is disabled, Forgotten Movies will skip automatic Seer/Tautulli scans and will not send reminder emails.
+            When the scheduler is disabled, Forgotten Movies will skip automatic Seerr/Tautulli scans and will not send reminder emails.
             Manual "Run Now" actions still work.
         </p>
         <button type="submit">Save</button>
@@ -20,7 +20,7 @@
     <h2>Run Now</h2>
     <p>Kick off the Forgotten Movies check immediately instead of waiting for the next schedule.</p>
     <p class="help-text">
-        This checks Seer for new requests, checks Tautulli for unwatched old requests, and sends any eligible reminder emails.
+        This checks Seerr for new requests, checks Tautulli for unwatched old requests, and sends any eligible reminder emails.
     </p>
     <form method="post" action="{{ url_for('run_now') }}">
         <input type="hidden" name="next" value="settings">
@@ -37,6 +37,29 @@
     </p>
     <form method="post" action="{{ url_for('update_watch_status') }}">
         <button type="submit">Check Watch Status Now</button>
+    </form>
+</div>
+
+<div class="card">
+    <h2>Seerr Diagnostics</h2>
+    <p>Log a redacted sample of recent available Seerr request payloads.</p>
+    <p class="help-text">
+        Use this temporarily to inspect TV season request fields in the Logs page. Email addresses, tokens, and Plex usernames are redacted.
+    </p>
+    <form method="post" action="{{ url_for('log_seerr_payload') }}">
+        <button type="submit">Log Seerr Payload Sample</button>
+    </form>
+    <form method="post" action="{{ url_for('log_seerr_payload_window') }}" style="margin-top: 0.75rem;">
+        <label for="request_range">Request range</label>
+        <input
+            id="request_range"
+            name="request_range"
+            type="text"
+            placeholder="150-160"
+            pattern="[0-9]+[ ]*-[ ]*[0-9]+"
+            required
+        >
+        <button type="submit">Log Seerr Range</button>
     </form>
 </div>
 

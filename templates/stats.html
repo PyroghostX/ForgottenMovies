@@ -25,6 +25,60 @@
         font-weight: 800;
         margin-top: 0.35rem;
     }
+    .page-title {
+        display: none;
+    }
+    .stats-summary-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+        flex-wrap: wrap;
+        margin-bottom: 0.75rem;
+    }
+    .stats-summary-header h1 {
+        display: block;
+        font-size: 2rem;
+        font-weight: 700;
+        margin: 0;
+    }
+    .stats-filter {
+        display: flex;
+        align-items: end;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        margin: 0;
+    }
+    .stats-filter label {
+        display: grid;
+        gap: 0.3rem;
+        color: #c5cae9;
+        font-size: 0.82rem;
+        font-weight: 700;
+    }
+    .stats-filter select,
+    .stats-filter input {
+        background: #171717;
+        color: #f5f5f5;
+        border: 1px solid #333;
+        border-radius: 8px;
+        padding: 0.55rem;
+    }
+    .stats-filter-custom {
+        display: none;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+    }
+    .stats-filter.custom-active .stats-filter-custom {
+        display: flex;
+    }
+    .oldest-request-note {
+        color: #9e9e9e;
+        font-size: 0.85rem;
+        font-weight: 700;
+        margin-bottom: 1rem;
+    }
     .stats-layout {
         display: grid;
         grid-template-columns: minmax(280px, 0.95fr) minmax(0, 2fr);
@@ -585,6 +639,39 @@
         }
     }
     @media (max-width: 560px) {
+        .stats-summary-header {
+            display: block;
+        }
+        .stats-filter {
+            align-items: stretch;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            margin-top: 0.85rem;
+        }
+        .stats-filter-custom {
+            grid-column: 1 / -1;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.65rem;
+            margin-top: 0;
+        }
+        .stats-filter.custom-active .stats-filter-custom {
+            display: grid;
+        }
+        .stats-filter label:first-child {
+            min-width: 0;
+        }
+        .stats-filter label,
+        .stats-filter select,
+        .stats-filter input {
+            width: 100%;
+        }
+        .stats-filter button {
+            align-self: end;
+            min-height: 40px;
+            padding-inline: 1rem;
+            width: auto;
+            white-space: nowrap;
+        }
         .info-popover {
             position: fixed;
             left: var(--info-popover-left, 1rem);
@@ -637,6 +724,36 @@
 {% endblock %}
 
 {% block content %}
+<div class="stats-summary-header">
+    <h1>Overall Stats</h1>
+    <form class="stats-filter" method="get" action="{{ url_for('stats') }}">
+        <input type="hidden" name="user" value="{{ stats.selected_key }}">
+        <label>Date Range
+            <select name="date_range" class="stats-date-range">
+                <option value="all" {% if stats.date_range == "all" %}selected{% endif %}>All time</option>
+                <option value="6m" {% if stats.date_range == "6m" %}selected{% endif %}>Past 6 months</option>
+                <option value="12m" {% if stats.date_range == "12m" %}selected{% endif %}>Past 12 months</option>
+                <option value="custom" {% if stats.date_range == "custom" %}selected{% endif %}>Custom</option>
+            </select>
+        </label>
+        <span class="stats-filter-custom">
+            <label>Start
+                <input type="date" name="start_date" value="{{ stats.custom_start }}">
+            </label>
+            <label>End
+                <input type="date" name="end_date" value="{{ stats.custom_end }}">
+            </label>
+        </span>
+        <button type="submit">Apply</button>
+    </form>
+</div>
+<div class="oldest-request-note">
+    Oldest request date: {{ stats.oldest_request_display }}
+    <span class="info-wrap">
+        <button type="button" class="info-trigger" aria-label="Oldest request info">i</button>
+        <span class="info-popover">This is the oldest request pulled from Seerr, to get more you can go update the variable: OVERSEERR_NUM_OF_HISTORY_RECORDS.</span>
+    </span>
+</div>
 <div class="stats-grid">
     <div class="stat-card">
         <span class="label">Requests</span>
@@ -713,7 +830,7 @@
                     </div>
                 </div>
                 <div class="mobile-user-list">
-                    <a class="mobile-user-option {% if stats.selected_key == 'all' %}active{% endif %}" href="{{ url_for('stats', user='all', _anchor='selected-user-picker') }}" data-watched="{{ stats.total_watched }}" data-requests="{{ stats.total_requests }}">
+                    <a class="mobile-user-option {% if stats.selected_key == 'all' %}active{% endif %}" href="{{ url_for('stats', user='all', date_range=stats.date_range, start_date=stats.custom_start, end_date=stats.custom_end, _anchor='selected-user-picker') }}" data-watched="{{ stats.total_watched }}" data-requests="{{ stats.total_requests }}">
                         <strong>All Users</strong>
                         <span>{{ stats.total_watched }}/{{ stats.total_requests }} watched ({{ stats.total_watched_percent }}%)</span>
                         <span class="bar-track" aria-hidden="true">
@@ -721,7 +838,7 @@
                         </span>
                     </a>
                 {% for user in stats.users %}
-                    <a class="mobile-user-option {% if stats.selected_key == user.key %}active{% endif %}" href="{{ url_for('stats', user=user.key, _anchor='selected-user-picker') }}" data-watched="{{ user.watched_count }}" data-requests="{{ user.request_count }}">
+                    <a class="mobile-user-option {% if stats.selected_key == user.key %}active{% endif %}" href="{{ url_for('stats', user=user.key, date_range=stats.date_range, start_date=stats.custom_start, end_date=stats.custom_end, _anchor='selected-user-picker') }}" data-watched="{{ user.watched_count }}" data-requests="{{ user.request_count }}">
                         <strong>{{ user.display_name }}</strong>
                         <span>{{ user.watched_count }}/{{ user.request_count }} watched ({{ user.watched_percent }}%)</span>
                         <span class="bar-track" aria-hidden="true">
@@ -733,7 +850,7 @@
             </div>
         </div>
         <div class="user-list" id="stats-user-list">
-            <a class="user-row {% if stats.selected_key == 'all' %}active{% endif %}" href="{{ url_for('stats', user='all') }}" data-watched="{{ stats.total_watched }}" data-requests="{{ stats.total_requests }}">
+            <a class="user-row {% if stats.selected_key == 'all' %}active{% endif %}" href="{{ url_for('stats', user='all', date_range=stats.date_range, start_date=stats.custom_start, end_date=stats.custom_end) }}" data-watched="{{ stats.total_watched }}" data-requests="{{ stats.total_requests }}">
                 <span class="user-row-header">
                     <span class="user-row-name">All Users</span>
                     <span class="user-row-metrics">{{ stats.total_watched }}/{{ stats.total_requests }} - {{ stats.total_watched_percent }}%</span>
@@ -743,7 +860,7 @@
                 </span>
             </a>
             {% for user in stats.users %}
-            <a class="user-row {% if stats.selected_key == user.key %}active{% endif %}" href="{{ url_for('stats', user=user.key) }}" data-watched="{{ user.watched_count }}" data-requests="{{ user.request_count }}">
+            <a class="user-row {% if stats.selected_key == user.key %}active{% endif %}" href="{{ url_for('stats', user=user.key, date_range=stats.date_range, start_date=stats.custom_start, end_date=stats.custom_end) }}" data-watched="{{ user.watched_count }}" data-requests="{{ user.request_count }}">
                 <span class="user-row-header">
                     <span class="user-row-name">{{ user.display_name }}</span>
                     <span class="user-row-metrics">{{ user.watched_count }}/{{ user.request_count }} - {{ user.watched_percent }}%</span>
@@ -817,7 +934,7 @@
                 <tbody>
                     {% for user in stats.users %}
                     <tr>
-                        <td><a href="{{ url_for('stats', user=user.key) }}" style="color:#c5cae9; font-weight:700;">{{ user.display_name }}</a></td>
+                        <td><a href="{{ url_for('stats', user=user.key, date_range=stats.date_range, start_date=stats.custom_start, end_date=stats.custom_end) }}" style="color:#c5cae9; font-weight:700;">{{ user.display_name }}</a></td>
                         <td data-sort-value="{{ user.request_count }}">{{ user.request_count }}</td>
                         <td data-sort-value="{{ user.watched_count }}">{{ user.watched_count }} ({{ user.watched_percent }}%)</td>
                         <td data-sort-value="{{ user.reminder_sent_count }}">{{ user.reminder_sent_count }}</td>
@@ -977,6 +1094,7 @@
 {% block extra_scripts %}
 <script>
 (function() {
+    initStatsDateFilters();
     initMobileUserPicker();
     initInfoPopovers();
     initUserSorting();
@@ -984,6 +1102,16 @@
     initColumnToggles();
     initTable("stats-detail-table", 10);
     initTable("all-users-table", 10);
+
+    function initStatsDateFilters() {
+        document.querySelectorAll(".stats-filter").forEach((form) => {
+            const select = form.querySelector(".stats-date-range");
+            if (!select) { return; }
+            const update = () => form.classList.toggle("custom-active", select.value === "custom");
+            select.addEventListener("change", update);
+            update();
+        });
+    }
 
     function initMobileUserPicker() {
         const trigger = document.getElementById("mobile-user-trigger");

@@ -334,13 +334,71 @@ def should_run_watch_status_check() -> bool:
 def _parse_iso(value: str | None) -> datetime:
     if not value:
         return datetime.min
+    if isinstance(value, str) and value.endswith("Z"):
+        value = value[:-1]
     try:
         return datetime.fromisoformat(value)
     except ValueError:
         return datetime.min
 
 
+def _latest_valid_iso(values: list[str | None]) -> str | None:
+    latest_dt = datetime.min
+    latest_raw = None
+    for value in values:
+        dt = _parse_iso(value)
+        if dt != datetime.min and dt > latest_dt:
+            latest_dt = dt
+            latest_raw = value
+    return latest_raw
+
+
+def _resolve_seerr_request_available_raw(request_payload: dict) -> str | None:
+    media = request_payload.get("media") or {}
+    media_type = media.get("mediaType") or request_payload.get("type")
+    if media_type == "tv":
+        seasons = request_payload.get("seasons") or []
+        season_dates = [
+            season.get("updatedAt") or season.get("createdAt")
+            for season in seasons
+            if season.get("status") == 5
+        ]
+        return _latest_valid_iso(
+            [
+                media.get("lastSeasonChange"),
+                request_payload.get("updatedAt"),
+                *season_dates,
+                request_payload.get("createdAt"),
+                media.get("mediaAddedAt") or media.get("mediaAddedDate"),
+            ]
+        )
+    return media.get("mediaAddedAt") or media.get("mediaAddedDate") or request_payload.get("updatedAt")
+
+
+def _requested_season_numbers(request_payload: dict) -> list[int]:
+    season_numbers = []
+    for season in request_payload.get("seasons") or []:
+        season_number = season.get("seasonNumber")
+        if season_number is not None:
+            season_numbers.append(season_number)
+    return season_numbers
+
+
 def _resolve_media_added(rec: dict) -> tuple[datetime, str | None]:
+    request_available_raw = rec.get("requestAvailableDate")
+    if request_available_raw:
+        return _parse_iso(request_available_raw), request_available_raw
+
+    if rec.get("mediaType") == "tv show":
+        media_raw = rec.get("mediaAddedDate") or rec.get("mediaAddedAt")
+        created_raw = rec.get("createdAt")
+        media_dt = _parse_iso(media_raw)
+        created_dt = _parse_iso(created_raw)
+        if created_dt != datetime.min and (media_dt == datetime.min or created_dt > media_dt):
+            return created_dt, created_raw
+        if media_raw:
+            return media_dt, media_raw
+
     for key in ("mediaAddedDate", "mediaAddedAt", "createdAt"):
         raw = rec.get(key)
         if raw:
@@ -478,6 +536,43 @@ def _date_display(value: str | None) -> str:
     return value or ""
 
 
+def _parse_date_bound(value: str | None, *, end_of_day: bool = False) -> datetime | None:
+    parsed = _parse_iso(value)
+    if parsed == datetime.min:
+        return None
+    if end_of_day:
+        return parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
+    return parsed.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _resolve_stats_date_range(
+    date_range: str | None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> tuple[str, datetime | None, datetime | None, str, str]:
+    selected = (date_range or "all").strip().lower()
+    now = datetime.now()
+    if selected == "6m":
+        return selected, now - timedelta(days=183), None, "", ""
+    if selected == "12m":
+        return selected, now - timedelta(days=365), None, "", ""
+    if selected == "custom":
+        start_dt = _parse_date_bound(start_date)
+        end_dt = _parse_date_bound(end_date, end_of_day=True)
+        return selected, start_dt, end_dt, start_date or "", end_date or ""
+    return "all", None, None, "", ""
+
+
+def _date_in_range(value: datetime, start_dt: datetime | None, end_dt: datetime | None) -> bool:
+    if value == datetime.min:
+        return False
+    if start_dt and value < start_dt:
+        return False
+    if end_dt and value > end_dt:
+        return False
+    return True
+
+
 def _extract_seer_title(request: dict, media: dict) -> str:
     candidates = (
         media.get("title"),
@@ -503,8 +598,23 @@ def _resolve_title_for_new_request(request: dict, media: dict, rating_key) -> tu
     return title, True
 
 
-def get_user_stats(selected_user: str | None = None) -> dict:
+def get_user_stats(
+    selected_user: str | None = None,
+    *,
+    date_range: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict:
+    selected_range, range_start, range_end, custom_start, custom_end = _resolve_stats_date_range(
+        date_range,
+        start_date,
+        end_date,
+    )
+    all_request_records = request_db.all()
+    oldest_request_dt = datetime.min
+
     email_records = email_db.all()
+    ranged_email_records = []
     email_records_by_key: dict[tuple[str, str], dict] = {}
     email_records_by_rating: dict[tuple[str, str], dict] = {}
     reminder_stats_by_email: dict[str, dict[str, int]] = {}
@@ -512,7 +622,11 @@ def get_user_stats(selected_user: str | None = None) -> dict:
         email_value = (rec.get("email") or "").strip().lower()
         tmdb_id = str(rec.get("tmdbId") or "")
         rating_key = str(rec.get("rating_key") or "")
-        if email_value:
+        sent_dt = _parse_iso(rec.get("email_sent_at"))
+        include_email = selected_range == "all" or _date_in_range(sent_dt, range_start, range_end)
+        if include_email:
+            ranged_email_records.append(rec)
+        if email_value and include_email:
             reminder_stats = reminder_stats_by_email.setdefault(email_value, {"sent": 0, "watched": 0})
             reminder_stats["sent"] += 1
             if rec.get("date_watched"):
@@ -525,7 +639,12 @@ def get_user_stats(selected_user: str | None = None) -> dict:
     users: dict[str, dict] = {}
     threshold = datetime.now() - timedelta(days=DAYS_SINCE_REQUEST)
 
-    for rec in request_db.all():
+    for rec in all_request_records:
+        media_dt, media_raw = _resolve_media_added(rec)
+        if selected_range != "all" and not _date_in_range(media_dt, range_start, range_end):
+            continue
+        if media_dt != datetime.min and (oldest_request_dt == datetime.min or media_dt < oldest_request_dt):
+            oldest_request_dt = media_dt
         email_value = (rec.get("email") or "").strip().lower()
         plex_username = (rec.get("plexUsername") or "").strip()
         user_key = email_value or plex_username.lower()
@@ -560,7 +679,6 @@ def get_user_stats(selected_user: str | None = None) -> dict:
         if not email_record and rating_key:
             email_record = email_records_by_rating.get((email_value, rating_key))
 
-        media_dt, media_raw = _resolve_media_added(rec)
         media_added_sort = media_dt.isoformat() if media_dt != datetime.min else (media_raw or "")
         watched_at = rec.get("tautulli_watch_date") or (email_record or {}).get("date_watched")
         reminder_sent_at = (email_record or {}).get("email_sent_at")
@@ -649,8 +767,8 @@ def get_user_stats(selected_user: str | None = None) -> dict:
     total_requests = sum(item["request_count"] for item in summaries)
     total_watched = sum(item["watched_count"] for item in summaries)
     total_not_watched = sum(item["not_watched_count"] for item in summaries)
-    total_reminders_sent = len(email_records)
-    total_reminders_watched = sum(1 for rec in email_records if rec.get("date_watched"))
+    total_reminders_sent = len(ranged_email_records)
+    total_reminders_watched = sum(1 for rec in ranged_email_records if rec.get("date_watched"))
 
     return {
         "users": summaries,
@@ -669,6 +787,10 @@ def get_user_stats(selected_user: str | None = None) -> dict:
         "total_reminder_success_percent": round((total_reminders_watched / total_reminders_sent) * 100)
         if total_reminders_sent
         else 0,
+        "date_range": selected_range,
+        "custom_start": custom_start,
+        "custom_end": custom_end,
+        "oldest_request_display": oldest_request_dt.strftime("%Y-%m-%d") if oldest_request_dt != datetime.min else "Unknown",
     }
 
 
@@ -807,15 +929,29 @@ def refresh_metadata_for_recent_unknowns(limit: int = 10, pool_size: int = 50) -
         rec.pop("_media_dt", None)
     return updates
 
-# Fetch Seer requests. Env var names keep OVERSEERR for backward compatibility.
+# Fetch r requests. Env var names keep OVERSEERR for backward compatibility.
 def get_overseerr_requests():
-    response = requests.get(f"{OVERSEERR_URL}/request?take={OVERSEERR_NUM_OF_HISTORY_RECORDS}&filter=available&sort=added", headers={"X-Api-Key": OVERSEERR_API_KEY})
+    response = requests.get(
+        f"{OVERSEERR_URL}/request",
+        params={"take": OVERSEERR_NUM_OF_HISTORY_RECORDS, "filter": "available", "sort": "added"},
+        headers={"X-Api-Key": OVERSEERR_API_KEY},
+    )
+    response.raise_for_status()
+    return response.json()['results']
+
+
+def get_overseerr_requests_page(skip: int, take: int):
+    response = requests.get(
+        f"{OVERSEERR_URL}/request",
+        params={"skip": skip, "take": take, "filter": "available", "sort": "added"},
+        headers={"X-Api-Key": OVERSEERR_API_KEY},
+    )
     response.raise_for_status()
     return response.json()['results']
 
 def _check_overseerr_connection(timeout=(5, 15)) -> bool:
     if not OVERSEERR_URL or not OVERSEERR_API_KEY:
-        logger.error("SEER CONNECTION FAILED: missing OVERSEERR_URL or OVERSEERR_API_KEY.")
+        logger.error("SEERR CONNECTION FAILED: missing OVERSEERR_URL or OVERSEERR_API_KEY.")
         return False
     test_url = f"{OVERSEERR_URL}/request"
     params = {"take": 1, "filter": "available", "sort": "added"}
@@ -825,7 +961,7 @@ def _check_overseerr_connection(timeout=(5, 15)) -> bool:
         resp.raise_for_status()
         return True
     except requests.RequestException as exc:
-        logger.error("SEER CONNECTION FAILED: %s", exc)
+        logger.error("SEERR CONNECTION FAILED: %s", exc)
         return False
 
 def _check_tautulli_connection(timeout=(5, 15)) -> bool:
@@ -1170,7 +1306,7 @@ def _attempt_send_request(
 
 # Transform Plex URL
 def transform_plex_url(plex_url):
-    # Bail out early when Seer hasn't populated a Plex URL yet.
+    # Bail out early when Seerr hasn't populated a Plex URL yet.
     if not plex_url:
         return None, None
 
@@ -1297,7 +1433,7 @@ def send_email(to_address, subject, body, is_html=False, unsubscribe_url=None):
 # Main logic
 def main():
     if not _check_overseerr_connection():
-        logger.info("Aborting run due to Seer connectivity issues.")
+        logger.info("Aborting run due to Seerr connectivity issues.")
         return
     if not _check_tautulli_connection():
         logger.info("Aborting run due to Tautulli connectivity issues.")
@@ -1322,8 +1458,8 @@ def main():
         else:
             logger.info("Skipping watch status check (timestamp tracking issue)")
 
-    logger.info("Step 2: Grab requests from Seer")
-    # Step 1: Fetch new Seer requests and add them to the database if not already present
+    logger.info("Step 2: Grab requests from Seerr")
+    # Step 1: Fetch new Seerr requests and add them to the database if not already present
     seer_requests = get_overseerr_requests()
     debug_emails_sent = 0
     new_request_metadata_lookups = 0
@@ -1338,7 +1474,24 @@ def main():
         requested_by_email = (requested_by_email_raw or "").strip()
         _ensure_email_user_record(requested_by_email)
 
-        if not request_db.search(Request.id == request_id):
+        request_available_raw = _resolve_seerr_request_available_raw(request)
+        requested_seasons = _requested_season_numbers(request)
+        existing_records = request_db.search(Request.id == request_id)
+        if existing_records:
+            updates = {}
+            if request_available_raw and not existing_records[0].get("requestAvailableDate"):
+                updates["requestAvailableDate"] = request_available_raw
+            if requested_seasons and not existing_records[0].get("requestedSeasons"):
+                updates["requestedSeasons"] = requested_seasons
+            if updates:
+                request_db.update(updates, Request.id == request_id)
+                logger.info(
+                    "Updated Seerr request %s with request-level availability metadata: %s",
+                    request_id,
+                    updates,
+                )
+
+        if not existing_records:
             media = request['media']
             
             media_added_raw = request['media'].get('mediaAddedAt') or request['media'].get('mediaAddedDate')
@@ -1355,7 +1508,7 @@ def main():
             ratingkey = request['media']['ratingKey']
             media_type = 'movie' if request['media']['mediaType'] == 'movie' else 'tv show'
             requested_by_username = request['requestedBy']['plexUsername']
-            # Resolve Plex URLs (new Seer fields + backward compatibility)
+            # Resolve Plex URLs (new Seerr fields + backward compatibility)
             raw_plex_url = media.get('plexUrl') or media.get('mediaUrl')
             mobile_url = media.get('iOSPlexUrl')
             
@@ -1371,20 +1524,22 @@ def main():
                         new_request_metadata_lookups += 1
                 except Exception as exc:
                     logger.warning(
-                        "Failed to resolve title from Tautulli for new Seer request %s (%s): %s",
+                        "Failed to resolve title from Tautulli for new Seerr request %s (%s): %s",
                         request_id,
                         ratingkey,
                         exc,
                     )
             elif title == "Unknown":
                 logger.info(
-                    "Leaving new Seer request %s as Unknown; per-run Tautulli metadata limit of %s reached.",
+                    "Leaving new Seerr request %s as Unknown; per-run Tautulli metadata limit of %s reached.",
                     request_id,
                     TAUTULLI_NEW_REQUEST_METADATA_LIMIT,
                 )
 
             request_db.insert({
                 'id': request_id,
+                'requestAvailableDate': request_available_raw or media_added_dt.isoformat(),
+                'requestedSeasons': requested_seasons,
                 'mediaAddedDate': media_added_dt.isoformat(),
                 'createdAt': created_now_iso,
                 'tmdbId': str(tmdb_id),

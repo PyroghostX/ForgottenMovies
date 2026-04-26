@@ -4,7 +4,7 @@ This note is a working map of the app so future changes can start from the right
 
 ## Runtime Shape
 
-- `forgotten_movies.py` is the core application module. It loads configuration from environment variables, initializes TinyDB stores in `/app/data`, talks to Seer/Tautulli/TMDB/SMTP, and contains the scheduled job logic.
+- `forgotten_movies.py` is the core application module. It loads configuration from environment variables, initializes TinyDB stores in `/app/data`, talks to Seerr/Tautulli/TMDB/SMTP, and contains the scheduled job logic.
 - `webapp.py` is the Flask dashboard. It imports helpers and TinyDB handles from `forgotten_movies.py`, renders templates, and exposes manual actions.
 - `scheduler_runner.py` starts the recurring job loop. It checks the scheduler-disabled setting before running.
 - `job_runner.py` wraps `forgotten_movies.main()` with a file lock so manual and scheduled jobs do not overlap.
@@ -16,14 +16,14 @@ This note is a working map of the app so future changes can start from the right
 
 All TinyDB files live in `DATA_DIR`, currently hardcoded as `/app/data`.
 
-- `request_data.json` via `request_db`: one record per Seer request the app has seen.
+- `request_data.json` via `request_db`: one record per Seerr request the app has seen.
 - `email_data.json` via `email_db`: one record per reminder email that has been sent.
 - `email_users.json` via `email_users_db`: per-email state such as cooldown and unsubscribe status.
 - `settings.json` via `settings_db`: scheduler toggle and last watch-status check timestamp.
 
 Important request fields:
 
-- `id`: Seer request id.
+- `id`: Seerr request id.
 - `mediaAddedDate`/`mediaAddedAt`/`createdAt`: used to decide when a request is old enough for reminders.
 - `tmdbId`, `ratingkey`, `mediaType`: identifiers used for matching media and querying Tautulli.
 - `plexUsername`, `email`: requester identity.
@@ -31,7 +31,7 @@ Important request fields:
 - `tautulli_watch_date`: set when Tautulli says the requester already watched the item before a reminder is sent.
 - `email_sent`, `skip_email`, `eligible_for_email`: reminder workflow flags.
 - `title`: starts as `Unknown`, later filled from Tautulli metadata/history.
-- New records try to store a real title immediately. The app first checks title-like fields from Seer, then asks Tautulli metadata for up to `TAUTULLI_NEW_REQUEST_METADATA_LIMIT` new unknown titles per run.
+- New records try to store a real title immediately. The app first checks title-like fields from Seerr, then asks Tautulli metadata for up to `TAUTULLI_NEW_REQUEST_METADATA_LIMIT` new unknown titles per run.
 
 Important email fields:
 
@@ -43,9 +43,9 @@ Important email fields:
 
 `forgotten_movies.main()` does the scheduled/manual work:
 
-1. Checks Seer and Tautulli connectivity.
+1. Checks Seerr and Tautulli connectivity.
 2. Runs `check_unwatched_emails_status()` at most once every 24 hours.
-3. Pulls fulfilled requests from Seer with `get_overseerr_requests()`.
+3. Pulls fulfilled requests from Seerr with `get_overseerr_requests()`.
 4. Inserts new request records into `request_db`.
 5. Refreshes recent unknown titles using Tautulli via `refresh_metadata_for_recent_unknowns()`.
 6. Groups overdue, unwatched, unsent requests by email.
@@ -53,7 +53,7 @@ Important email fields:
 
 ## External APIs
 
-- Seer: `GET {OVERSEERR_URL}/request?take=...&filter=available&sort=added`. The env var names remain `OVERSEERR_*` for backward compatibility.
+- Seerr: `GET {OVERSEERR_URL}/request?take=...&filter=available&sort=added`. The env var names remain `OVERSEERR_*` for backward compatibility.
 - Tautulli:
   - `get_server_info` for startup checks.
   - `get_history` in `has_user_watched_media(user, rating_key, media_type)`.
@@ -90,10 +90,10 @@ For fully authoritative stats, Tautulli is still needed. Local TinyDB data only 
 
 Per normal job run:
 
-- Seer gets 1 request-list call: `GET /request?take={OVERSEERR_NUM_OF_HISTORY_RECORDS}&filter=available&sort=added`.
-- Seer also gets 1 lightweight connectivity call before the run.
+- Seerr gets 1 request-list call: `GET /request?take={OVERSEERR_NUM_OF_HISTORY_RECORDS}&filter=available&sort=added`.
+- Seerr also gets 1 lightweight connectivity call before the run.
 - Tautulli gets 1 lightweight connectivity call before the run.
-- Tautulli gets up to `TAUTULLI_NEW_REQUEST_METADATA_LIMIT` metadata calls for brand-new Seer records whose title is still unknown. Default: 50 per run.
+- Tautulli gets up to `TAUTULLI_NEW_REQUEST_METADATA_LIMIT` metadata calls for brand-new Seerr records whose title is still unknown. Default: 50 per run.
 - Tautulli gets up to 1 history call per unwatched sent reminder during the 24-hour watch-status check.
 - Tautulli checks up to 50 recent unknown request records, regardless of due date, but stops after refreshing 10 titles.
 - Tautulli gets 1 history call for each overdue candidate evaluated for sending.

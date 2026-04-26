@@ -1,4 +1,5 @@
 import ipaddress
+import json
 import logging
 import os
 import time
@@ -24,6 +25,8 @@ from forgotten_movies import (
     flush_log_handlers,
     get_email_user,
     get_log_level,
+    get_overseerr_requests,
+    get_overseerr_requests_page,
     get_overdue_requests_for_ui,
     get_recent_sent_emails,
     get_user_stats,
@@ -128,6 +131,15 @@ BASE_DIR = os.path.dirname(__file__)
 FILES_DIR = os.path.join(BASE_DIR, "files")
 
 AVAILABLE_LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+SEERR_DIAGNOSTIC_REDACT_KEYS = {
+    "apiKey",
+    "displayName",
+    "email",
+    "password",
+    "plexToken",
+    "plexUsername",
+    "token",
+}
 
 @app.route("/assets/<path:filename>")
 def asset(filename: str):
@@ -197,6 +209,20 @@ def _format_unsubscribe_records(records):
     return formatted
 
 
+def _redact_payload(value):
+    if isinstance(value, dict):
+        redacted = {}
+        for key, child in value.items():
+            if key in SEERR_DIAGNOSTIC_REDACT_KEYS:
+                redacted[key] = "<redacted>"
+            else:
+                redacted[key] = _redact_payload(child)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_payload(item) for item in value]
+    return value
+
+
 def _redirect_after_request_action(default_anchor: str):
     if request.form.get("next") == "stats":
         user = (request.form.get("user") or "").strip()
@@ -206,10 +232,18 @@ def _redirect_after_request_action(default_anchor: str):
     return redirect(url_for("index", _anchor=default_anchor))
 
 
+def _stats_filter_kwargs() -> dict[str, str | None]:
+    return {
+        "date_range": request.args.get("date_range"),
+        "start_date": request.args.get("start_date"),
+        "end_date": request.args.get("end_date"),
+    }
+
+
 @app.route("/", methods=["GET"])
 def index():
     todo_items = get_overdue_requests_for_ui()
-    stats_summary = get_user_stats()
+    stats_summary = get_user_stats(**_stats_filter_kwargs())
     todo_messages: list[tuple[str, str]] = []
     recent_emails = get_recent_sent_emails()
     recent_messages: list[tuple[str, str]] = []
@@ -244,7 +278,7 @@ def index():
 
 @app.route("/stats", methods=["GET"])
 def stats():
-    stats_data = get_user_stats(request.args.get("user"))
+    stats_data = get_user_stats(request.args.get("user"), **_stats_filter_kwargs())
     return render_template(
         "stats.html",
         page_title="Overall Stats",
@@ -627,6 +661,81 @@ def update_watch_status():
     except Exception as exc:
         APP_LOGGER.exception("Watch status check failed: %s", exc)
         flash(f"Watch status check failed: {exc}", "error")
+    return redirect(url_for("settings"))
+
+
+@app.route("/settings/log-seerr-payload", methods=["POST"])
+def log_seerr_payload():
+    APP_LOGGER.info("Manual diagnostic: Seerr request payload logging requested")
+    try:
+        requests_payload = get_overseerr_requests()
+        sample = requests_payload[:5]
+        redacted_sample = _redact_payload(sample)
+        APP_LOGGER.info(
+            "SEERR REQUEST PAYLOAD DIAGNOSTIC START count=%s sample_count=%s",
+            len(requests_payload),
+            len(sample),
+        )
+        APP_LOGGER.info(
+            "SEERR REQUEST PAYLOAD DIAGNOSTIC JSON:\n%s",
+            json.dumps(redacted_sample, indent=2, sort_keys=True, default=str),
+        )
+        APP_LOGGER.info("SEERR REQUEST PAYLOAD DIAGNOSTIC END")
+        flash(
+            f"Logged {len(sample)} redacted Seerr request payload(s). Open Logs to inspect them.",
+            "success",
+        )
+    except Exception as exc:
+        APP_LOGGER.exception("Failed to log Seerr request payload: %s", exc)
+        flash(f"Failed to log Seerr request payload: {exc}", "error")
+    return redirect(url_for("settings"))
+
+
+@app.route("/settings/log-seerr-payload-window", methods=["POST"])
+def log_seerr_payload_window():
+    range_value = (request.form.get("request_range") or "").strip()
+    try:
+        start_text, end_text = range_value.split("-", 1)
+        start = int(start_text.strip())
+        end = int(end_text.strip())
+        if start < 0 or end < start:
+            raise ValueError
+    except ValueError:
+        flash("Enter a valid Seerr request range, like 150-160.", "error")
+        return redirect(url_for("settings"))
+
+    skip = start
+    take = (end - start) + 1
+    if take > 50:
+        flash("Please log 50 Seerr requests or fewer at a time.", "error")
+        return redirect(url_for("settings"))
+
+    APP_LOGGER.info(
+        "Manual diagnostic: Seerr request payload window logging requested skip=%s take=%s",
+        skip,
+        take,
+    )
+    try:
+        requests_payload = get_overseerr_requests_page(skip=skip, take=take)
+        redacted_payload = _redact_payload(requests_payload)
+        APP_LOGGER.info(
+            "SEERR REQUEST PAYLOAD WINDOW DIAGNOSTIC START skip=%s take=%s count=%s",
+            skip,
+            take,
+            len(requests_payload),
+        )
+        APP_LOGGER.info(
+            "SEERR REQUEST PAYLOAD WINDOW DIAGNOSTIC JSON:\n%s",
+            json.dumps(redacted_payload, indent=2, sort_keys=True, default=str),
+        )
+        APP_LOGGER.info("SEERR REQUEST PAYLOAD WINDOW DIAGNOSTIC END")
+        flash(
+            f"Logged {len(requests_payload)} redacted Seerr request payload(s) from records {start}-{end}.",
+            "success",
+        )
+    except Exception as exc:
+        APP_LOGGER.exception("Failed to log Seerr request payload window: %s", exc)
+        flash(f"Failed to log Seerr request payload window: {exc}", "error")
     return redirect(url_for("settings"))
 
 
