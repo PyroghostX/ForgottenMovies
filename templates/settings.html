@@ -9,10 +9,22 @@
             Disable Scheduler (API calls and emails)
         </label>
         <p class="help-text">
-            When the scheduler is disabled, Forgotten Movies will skip automatic Overseerr/Tautulli scans and will not send reminder emails.
+            When the scheduler is disabled, Forgotten Movies will skip automatic Seer/Tautulli scans and will not send reminder emails.
             Manual "Run Now" actions still work.
         </p>
         <button type="submit">Save</button>
+    </form>
+</div>
+
+<div class="card">
+    <h2>Run Now</h2>
+    <p>Kick off the Forgotten Movies check immediately instead of waiting for the next schedule.</p>
+    <p class="help-text">
+        This checks Seer for new requests, checks Tautulli for unwatched old requests, and sends any eligible reminder emails.
+    </p>
+    <form method="post" action="{{ url_for('run_now') }}">
+        <input type="hidden" name="next" value="settings">
+        <button type="submit">Run Job Now</button>
     </form>
 </div>
 
@@ -26,5 +38,13 @@
     <form method="post" action="{{ url_for('update_watch_status') }}">
         <button type="submit">Check Watch Status Now</button>
     </form>
+</div>
+
+<div class="card">
+    <h2>Logs</h2>
+    <p class="help-text">
+        View recent application logs, change log level, or clear rotated log files.
+    </p>
+    <p><a href="{{ url_for('view_logs') }}" style="color:#c5cae9; font-weight:700;">Open Logs</a></p>
 </div>
 {% endblock %}

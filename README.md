@@ -1,11 +1,11 @@
 # <img src="files/logo.png" alt="Forgotten Movies logo" width="90"> Forgotten Movies 
 
-Forgotten Movies keeps Plex requests from gathering dust. It watches Overseerr for requests that have been fulfilled, checks Tautulli to see whether the requester actually watched them, and sends a friendly email reminder when something has been available for too long.                 
+Forgotten Movies keeps Plex requests from gathering dust. It watches Seer for requests that have been fulfilled, checks Tautulli to see whether the requester actually watched them, and sends a friendly email reminder when something has been available for too long.                 
 
 
 # Features
 
-- **Automated reminders:** Periodically scan Overseerr, cross-reference Tautulli history, and sends emails via SMTP to the original requester.
+- **Automated reminders:** Periodically scan Seer, cross-reference Tautulli history, and sends emails via SMTP to the original requester.
 - **Custom email template:** Default ships to `/app/data/email_template_original.html`; add `/app/data/email_template.html` to override while still receiving upstream updates.
 - **Dashboard:** Kick off manual runs, review the upcoming reminder queue, see recently sent reminders, and manage unsubscribed addresses.
 - **Scheduler toggle:** Temporarily pause automated API calls and emails from the settings page.
@@ -16,7 +16,7 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Overseerr f
 
 - Plex Media Server
 - Tautulli
-- Overseerr or Jellyseerr (Important: Make sure the "Web App url" set on your overseerr plex settings page)
+- Seer (Overseerr or Jellyseerr). Important: make sure the "Web App URL" is set on your Seer Plex settings page.
 - SMTP email so Forgotten Movies can send reminder emails (other methods built out later).
 - TheMovieDB API key (optional but recommended) if you want poster artwork in the reminders.
 
@@ -40,7 +40,7 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Overseerr f
 | Key | Description |
 |-----|-------------|
 | `TAUTULLI_API_KEY`, `TAUTULLI_URL` | Tautulli credentials for watch history queries; the URL must include the v2 API endpoint (e.g. `https://tautulli.example.com/api/v2`). |
-| `OVERSEERR_API_KEY`, `OVERSEERR_URL` | Overseerr or Jellyseerr API details used to pull fulfilled requests; point the URL at the `/api/v1` root (e.g. `https://request.example.com/api/v1`). |
+| `OVERSEERR_API_KEY`, `OVERSEERR_URL` | Seer API details used to pull fulfilled requests; point the URL at the `/api/v1` root (e.g. `https://request.example.com/api/v1`). The variable names stay `OVERSEERR_*` for backward compatibility. |
 | `THEMOVIEDB_API_KEY` | Fetches poster artwork for reminder emails. Leave unset to skip artwork (emails still send). |
 | `SMTP_SERVER`, `SMTP_PORT` | SMTP host/port for STARTTLS email delivery (port defaults to 587). |
 | `SMTP_ENCRYPTION` | One of `STARTTLS` (default), `SSL`, or `NONE`. If unset and `SMTP_PORT=465`, the app automatically picks `SSL`. |
@@ -48,7 +48,8 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Overseerr f
 | `FROM_EMAIL_ADDRESS`, `FROM_NAME`, `EMAIL_PASSWORD` | Outbound email identity and password. |
 | `BCC_EMAIL_ADDRESS` | Optional address copied on reminders (you may also set it equal to `FROM_EMAIL_ADDRESS`). |
 | `ADMIN_NAME` | Shown in reminder copy so recipients know who to contact. |
-| `OVERSEERR_NUM_OF_HISTORY_RECORDS` | Number of Overseerr entries fetched per scan (default 10). |
+| `OVERSEERR_NUM_OF_HISTORY_RECORDS` | Number of Seer entries fetched per scan (default 10). |
+| `TAUTULLI_NEW_REQUEST_METADATA_LIMIT` | Maximum new Seer requests per run that can ask Tautulli for title metadata when Seer did not provide a title (default 50). |
 | `DAYS_SINCE_REQUEST`, `DAYS_SINCE_REQUEST_EMAIL_TEXT` | Minimum days since request fulfillment before a reminder is sent (default 90) and the human-readable text used in the email template (default `"3 months"`). |
 | `HOURS_BETWEEN_EMAILS` | Cooldown window per recipient (default 24 hours). |
 | `REQUEST_URL` | Link back to your request portal (used in the email footer). |
@@ -184,7 +185,7 @@ Helpful context variables available inside the template:
 |----------|---------|
 | `plex_username` | Plex username of the requester. |
 | `media_type` | `"movie"` or `"tv show"`. |
-| `title` | Title retrieved from Overseerr/Tautulli. |
+| `title` | Title retrieved from Seer/Tautulli. |
 | `time_since_text` | Human-readable string such as `"3 months"`. |
 | `plex_url` | Deep link to the title on Plex (desktop/web). |
 | `mobile_url` | Optional Plex mobile deep link. |
@@ -216,7 +217,7 @@ For example: The {{ media_type }} <strong>{{ title }}</strong> that you requeste
 
 ## Reading the logs
 
-- "Registered email user": You'll see this for each new email it finds in the overseerr requests.
+- "Registered email user": You'll see this for each new email it finds in the Seer requests.
 
 - "smtplib.SMTPAuthenticationError: (535, b'5.7.8 Username and Password not accepted.": Your email or password is wrong, check email address and make sure you setup an app password https://myaccount.google.com/apppasswords
 
@@ -225,12 +226,12 @@ For example: The {{ media_type }} <strong>{{ title }}</strong> that you requeste
 
 | Component | Purpose |
 |-----------|---------|
-| `forgotten_movies.py` | Core job. Loads Overseerr requests, checks Tautulli watch history, builds emails from the template, tracks state in TinyDB. |
+| `forgotten_movies.py` | Core job. Loads Seer requests, checks Tautulli watch history, builds emails from the template, tracks state in TinyDB. |
 | `webapp.py` | Flask UI for manual runs, queue visibility, logs, and settings. Manual runs now defer to an inter-process lock so they play nicely with the scheduler. |
 | `scheduler_runner.py` | Standalone process that wakes up every `JOB_INTERVAL_SECONDS`, respects the TinyDB disable flag, and triggers the core job if the lock is free. |
 | `job_runner.py` | Shared helpers that wrap the core job with logging, lock acquisition, and log flushing. |
 | `entrypoint.py` | Lightweight supervisor that starts both the scheduler process and Gunicorn, forwarding signals so the container restarts cleanly. |
-| TinyDB (`/app/data/*.json`) | Stores Overseerr request metadata, email history, and unsubscribe list. |
+| TinyDB (`/app/data/*.json`) | Stores Seer request metadata, email history, and unsubscribe list. |
 | `templates/email_template.html` | HTML reminder template. Copied to `/app/data/email_template_original.html` on start; `/app/data/email_template.html` overrides if present. |
 | `templates/base.html` et al. | Shared layout, dashboard, and log templates for the web UI. |
 | `docker-compose.yml` | Opinionated container configuration: single service running the supervisor entrypoint with a bind-mounted data directory. |

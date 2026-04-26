@@ -1,0 +1,1502 @@
+{% extends "base.html" %}
+
+{% block extra_head %}
+<style>
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 1rem;
+        margin-bottom: 2rem;
+    }
+    .stat-card {
+        background: #1d1d1d;
+        border-radius: 8px;
+        padding: 1rem;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    }
+    .stat-card .label {
+        color: #c5cae9;
+        font-size: 0.85rem;
+        font-weight: 700;
+    }
+    .stat-card .value {
+        display: block;
+        font-size: 2rem;
+        font-weight: 800;
+        margin-top: 0.35rem;
+    }
+    .stats-layout {
+        display: grid;
+        grid-template-columns: minmax(280px, 0.95fr) minmax(0, 2fr);
+        gap: 2rem;
+        align-items: start;
+        min-width: 0;
+    }
+    .stats-layout .card {
+        min-width: 0;
+    }
+    .mobile-user-picker {
+        display: none;
+        scroll-margin-top: 110px;
+    }
+    .mobile-user-trigger {
+        width: 100%;
+        min-height: 56px;
+        background: #171717;
+        color: #f5f5f5;
+        border: 1px solid #333;
+        border-radius: 8px;
+        padding: 0.75rem 0.9rem;
+        font-weight: 700;
+        text-align: left;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.8rem;
+    }
+    .mobile-user-trigger-text {
+        min-width: 0;
+    }
+    .mobile-user-trigger-text span {
+        display: block;
+        color: #c5cae9;
+        font-size: 0.78rem;
+        margin-bottom: 0.25rem;
+    }
+    .mobile-user-trigger-text strong {
+        display: block;
+        font-size: 1rem;
+        overflow-wrap: anywhere;
+    }
+    .mobile-user-trigger-arrow {
+        flex: 0 0 auto;
+        color: #c5cae9;
+        font-size: 1.4rem;
+        line-height: 1;
+    }
+    .mobile-user-modal {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: #121212;
+        z-index: 2000;
+        padding: 1rem;
+        overflow-y: auto;
+    }
+    .mobile-user-modal.open {
+        display: block;
+    }
+    .mobile-user-modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1rem;
+        margin-bottom: 1rem;
+    }
+    .mobile-user-modal-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.8rem;
+        flex: 0 0 auto;
+    }
+    .mobile-user-modal-header h2 {
+        margin: 0;
+    }
+    .mobile-user-close {
+        min-width: 48px;
+        min-height: 48px;
+        border: none;
+        border-radius: 8px;
+        background: #2a2a2a;
+        color: #f5f5f5;
+        font-size: 1.5rem;
+        cursor: pointer;
+    }
+    .mobile-user-list {
+        display: grid;
+        gap: 0.7rem;
+    }
+    .mobile-user-option {
+        display: block;
+        color: #f5f5f5;
+        text-decoration: none;
+        background: #171717;
+        border: 1px solid #333;
+        border-radius: 8px;
+        padding: 1rem;
+        min-height: 64px;
+    }
+    .mobile-user-option.active {
+        border-color: #7986cb;
+        background: #202033;
+    }
+    .mobile-user-option strong {
+        display: block;
+        font-size: 1.08rem;
+        overflow-wrap: anywhere;
+    }
+    .mobile-user-option span {
+        display: block;
+        margin-top: 0.3rem;
+        color: #c5cae9;
+        font-size: 0.9rem;
+    }
+    .user-list {
+        display: grid;
+        gap: 0.75rem;
+    }
+    .user-list-heading {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        color: #9e9e9e;
+        font-size: 0.8rem;
+        font-weight: 700;
+        margin-bottom: 0.4rem;
+    }
+    .user-sort-controls {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        flex: 0 0 auto;
+    }
+    .user-sort-button {
+        background: none;
+        border: none;
+        color: #c5cae9;
+        cursor: pointer;
+        font: inherit;
+        padding: 0;
+    }
+    .user-sort-button:hover,
+    .user-sort-button.active {
+        color: #ffcc80;
+        text-decoration: underline;
+    }
+    .user-row {
+        display: block;
+        color: #f5f5f5;
+        text-decoration: none;
+        border: 1px solid #2d2d2d;
+        border-radius: 8px;
+        padding: 0.8rem;
+        background: #171717;
+        overflow: hidden;
+    }
+    .user-row:hover,
+    .user-row.active {
+        border-color: #7986cb;
+        background: #202033;
+    }
+    .user-row-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        font-weight: 700;
+        align-items: flex-start;
+    }
+    .user-row-name {
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+    .user-row-metrics {
+        flex: 0 0 auto;
+        color: #c5cae9;
+        font-size: 0.85rem;
+        text-align: right;
+        white-space: nowrap;
+    }
+    .user-email {
+        color: #9e9e9e;
+        font-size: 0.85rem;
+        margin-top: 0.2rem;
+        overflow-wrap: anywhere;
+    }
+    .bar-track {
+        display: block;
+        width: 100%;
+        height: 10px;
+        border-radius: 999px;
+        background: #303030;
+        overflow: hidden;
+        margin-top: 0.65rem;
+    }
+    .bar-fill {
+        display: block;
+        height: 100%;
+        background: linear-gradient(90deg, #66bb6a, #7986cb);
+    }
+    .table-controls {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+    .table-controls .table-meta {
+        font-weight: 600;
+        color: #c5cae9;
+    }
+    .table-search {
+        padding: 0.4rem 0.6rem;
+        border: 1px solid #555;
+        border-radius: 4px;
+        background: #2a2a2a;
+        color: #e0e0e0;
+        font-size: 0.9rem;
+        min-width: 200px;
+        max-width: 100%;
+    }
+    .filter-dropdown {
+        position: relative;
+        display: inline-block;
+    }
+    .filter-trigger {
+        background: none;
+        border: none;
+        color: #c5cae9;
+        cursor: pointer;
+        padding: 0.2rem 0.4rem;
+        margin-left: 0.3rem;
+        border-radius: 3px;
+        font-size: 0.85rem;
+    }
+    .filter-trigger.active,
+    .filter-trigger:hover {
+        color: #ffcc80;
+        background: rgba(255, 204, 128, 0.15);
+    }
+    .filter-menu {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        background: #2a2a2a;
+        border: 1px solid #555;
+        border-radius: 6px;
+        min-width: 220px;
+        max-width: min(400px, calc(100vw - 32px));
+        max-height: 350px;
+        overflow-y: auto;
+        overflow-x: hidden;
+        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+        padding: 0.5rem;
+        display: none;
+        z-index: 1000;
+        margin-top: 0.25rem;
+    }
+    .filter-dropdown.open .filter-menu {
+        display: block;
+    }
+    .filter-menu-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding-bottom: 0.5rem;
+        margin-bottom: 0.5rem;
+        border-bottom: 1px solid #444;
+    }
+    .filter-menu-header button {
+        background: none;
+        border: none;
+        color: #7986cb;
+        cursor: pointer;
+        font-size: 0.85rem;
+        padding: 0.2rem 0.4rem;
+    }
+    .filter-option {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.4rem 0.5rem;
+        cursor: pointer;
+        border-radius: 4px;
+    }
+    .filter-option:hover {
+        background: rgba(121, 134, 203, 0.2);
+    }
+    .filter-option input {
+        flex: 0 0 auto;
+    }
+    .filter-option label {
+        cursor: pointer;
+        overflow-wrap: anywhere;
+    }
+    .filter-backdrop {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 999;
+    }
+    .filter-backdrop.active {
+        display: block;
+    }
+    .pager {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+    }
+    .pager .page-info {
+        color: #c5cae9;
+        font-size: 0.85rem;
+    }
+    th.sortable {
+        white-space: nowrap;
+        cursor: pointer;
+    }
+    .table-wrapper {
+        max-width: 100%;
+        overflow-x: auto;
+        display: flex;
+        flex-direction: column;
+    }
+    #stats-detail-table {
+        min-width: 840px;
+    }
+    #all-users-table {
+        min-width: 820px;
+    }
+    .column-toggle {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.6rem;
+        margin: 0.75rem 0;
+        color: #c5cae9;
+        font-size: 0.85rem;
+        font-weight: 700;
+    }
+    .column-toggle label {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+        background: #171717;
+        border: 1px solid #333;
+        border-radius: 8px;
+        padding: 0.35rem 0.5rem;
+    }
+    .col-hidden {
+        display: none !important;
+    }
+    .mini-metrics {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 0.75rem;
+        margin: 1rem 0;
+    }
+    .mini-metric {
+        background: #171717;
+        border-radius: 8px;
+        padding: 0.8rem;
+        border: 1px solid #2d2d2d;
+    }
+    .mini-metric span {
+        display: block;
+        color: #9e9e9e;
+        font-size: 0.8rem;
+        font-weight: 700;
+    }
+    .mini-metric strong {
+        display: block;
+        font-size: 1.5rem;
+        margin-top: 0.25rem;
+    }
+    .info-wrap {
+        position: relative;
+        display: inline-flex !important;
+        align-items: center;
+        margin-left: 0.25rem;
+    }
+    .info-trigger {
+        width: 18px;
+        height: 18px;
+        border-radius: 999px;
+        border: 1px solid #555;
+        background: #2a2a2a;
+        color: #c5cae9;
+        font-size: 0.72rem;
+        font-weight: 800;
+        line-height: 1;
+        cursor: pointer;
+        padding: 0;
+    }
+    .info-popover {
+        display: none !important;
+        position: absolute;
+        left: 0;
+        bottom: 130%;
+        width: min(260px, calc(100vw - 40px));
+        background: #2a2a2a;
+        color: #f5f5f5;
+        border: 1px solid #555;
+        border-radius: 8px;
+        padding: 0.65rem;
+        font-size: 0.82rem;
+        font-weight: 600;
+        line-height: 1.35;
+        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+        z-index: 40;
+    }
+    .info-wrap:hover .info-popover,
+    .info-trigger:focus + .info-popover {
+        display: block !important;
+    }
+    .status-pill {
+        display: inline-block;
+        border-radius: 999px;
+        padding: 0.2rem 0.55rem;
+        font-size: 0.78rem;
+        font-weight: 700;
+        white-space: nowrap;
+    }
+    .status-watched { background: rgba(76, 175, 80, 0.24); color: #b9f6ca; }
+    .status-not-watched { background: rgba(229, 57, 53, 0.22); color: #ffab91; }
+    .status-pending,
+    .status-not-due { background: rgba(255, 204, 128, 0.18); color: #ffcc80; }
+    .status-skipped { background: rgba(158, 158, 158, 0.2); color: #e0e0e0; }
+    .actions-col {
+        width: 70px;
+        text-align: right;
+    }
+    .actions-cell {
+        text-align: right;
+        white-space: nowrap;
+    }
+    .action-menu {
+        position: relative;
+        display: inline-block;
+    }
+    .menu-trigger {
+        background: none;
+        border: none;
+        color: #c5cae9;
+        font-size: 1.25rem;
+        padding: 0.1rem 0.4rem;
+        border-radius: 999px;
+        cursor: pointer;
+    }
+    .menu-trigger:hover,
+    .action-menu.open .menu-trigger {
+        color: #ffcc80;
+    }
+    .menu-dropdown {
+        position: absolute;
+        top: 110%;
+        right: 0;
+        background: #2a2a2a;
+        border-radius: 8px;
+        min-width: 160px;
+        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+        padding: 0.35rem 0;
+        display: none;
+        z-index: 20;
+    }
+    .action-menu.open .menu-dropdown {
+        display: block;
+    }
+    .menu-dropdown form {
+        margin: 0;
+    }
+    .menu-item-button {
+        width: 100%;
+        background: none;
+        border: none;
+        color: #e0e0e0;
+        text-align: left;
+        padding: 0.5rem 0.9rem;
+        font-size: 0.95rem;
+        cursor: pointer;
+    }
+    .menu-item-button:hover,
+    .menu-item-button:focus {
+        background: rgba(63, 81, 181, 0.35);
+        color: #ffffff;
+        outline: none;
+    }
+    .menu-item-button.confirming {
+        background: rgba(229, 115, 115, 0.35);
+        color: #ffccbc;
+    }
+    .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+    }
+    .selected-user-heading {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: flex-start;
+        margin-bottom: 0.75rem;
+    }
+    @media (max-width: 900px) {
+        .stats-layout {
+            grid-template-columns: 1fr;
+            gap: 0.75rem;
+        }
+        .stats-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+        }
+        .stat-card {
+            padding: 0.75rem;
+        }
+        .stat-card .value {
+            font-size: 1.25rem;
+        }
+        .mini-metrics {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 0.6rem;
+        }
+        .mini-metric {
+            padding: 0.6rem;
+        }
+        .mini-metric strong {
+            font-size: 1.05rem;
+        }
+        .users-card .user-list,
+        .user-list-heading > .user-sort-controls {
+            display: none;
+        }
+        .users-card {
+            margin-bottom: 0;
+            padding-bottom: 0.75rem;
+        }
+        .mobile-user-picker {
+            display: block;
+        }
+        .selected-user-card {
+            margin-top: -0.35rem;
+        }
+        .filter-menu {
+            position: fixed;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            max-width: 90vw;
+            max-height: 70vh;
+        }
+    }
+    @media (max-width: 560px) {
+        .info-popover {
+            position: fixed;
+            left: var(--info-popover-left, 1rem);
+            right: auto;
+            top: var(--info-popover-top, 6rem);
+            bottom: auto;
+            transform: none;
+            width: calc(100vw - 2rem);
+            max-width: none;
+            max-height: calc(100vh - 2rem);
+            overflow-y: auto;
+        }
+        .info-popover::before {
+            content: "";
+            position: absolute;
+            top: -9px;
+            left: var(--info-arrow-left, 50%);
+            transform: translateX(-50%) rotate(45deg);
+            width: 16px;
+            height: 16px;
+            background: #2a2a2a;
+            border-left: 1px solid #555;
+            border-top: 1px solid #555;
+        }
+        .table-controls {
+            align-items: stretch;
+            flex-direction: column;
+        }
+        .table-controls label,
+        .table-controls select,
+        .table-search,
+        .pager {
+            width: 100%;
+        }
+        .pager {
+            justify-content: space-between;
+        }
+        .table-controls {
+            order: 3;
+            margin-top: 0.75rem;
+        }
+        .column-toggle {
+            order: 2;
+        }
+        .table-wrapper table {
+            order: 1;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="stats-grid">
+    <div class="stat-card">
+        <span class="label">Requests</span>
+        <span class="value">{{ stats.total_requests }}</span>
+    </div>
+    <div class="stat-card">
+        <span class="label">Watched</span>
+        <span class="value">{{ stats.total_watched }} ({{ stats.total_watched_percent }}%)</span>
+    </div>
+    <div class="stat-card">
+        <span class="label">Not Watched</span>
+        <span class="value">{{ stats.total_not_watched }} ({{ stats.total_not_watched_percent }}%)</span>
+    </div>
+    <div class="stat-card">
+        <span class="label">Pending/Skipped
+            <span class="info-wrap">
+                <button type="button" class="info-trigger" aria-label="Pending and skipped info">i</button>
+                <span class="info-popover">
+                    <strong>Pending:</strong> These are requests that haven't been watched yet and haven't hit your DAYS_SINCE_REQUEST timeout.<br>
+                    <strong>Skipped:</strong> These are reminders you hit 'Don't Send' on.
+                </span>
+            </span>
+        </span>
+        <span class="value">{{ stats.total_pending + stats.total_skipped }}</span>
+    </div>
+    <div class="stat-card">
+        <span class="label">Reminders Sent</span>
+        <span class="value">{{ stats.total_reminders_sent }}</span>
+    </div>
+    <div class="stat-card">
+        <span class="label">Watched After Reminder</span>
+        <span class="value">{{ stats.total_reminders_watched }}</span>
+    </div>
+    <div class="stat-card">
+        <span class="label">Reminder Success</span>
+        <span class="value">{{ stats.total_reminder_success_percent }}%</span>
+    </div>
+</div>
+
+{% if stats.users %}
+<div class="stats-layout">
+    <div class="card users-card">
+        <div class="user-list-heading">
+            <h2>Users</h2>
+            <span class="user-sort-controls">
+                <button type="button" class="user-sort-button" data-sort-users="watched">Watched</button>
+                <span>/</span>
+                <button type="button" class="user-sort-button" data-sort-users="requests">Requests</button>
+            </span>
+        </div>
+        <div class="mobile-user-picker" id="selected-user-picker">
+            <button type="button" class="mobile-user-trigger" id="mobile-user-trigger">
+                <span class="mobile-user-trigger-text">
+                    <span>Selected User</span>
+                    {% if stats.selected_key == "all" %}
+                    <strong>All Users</strong>
+                    {% else %}
+                    {% set selected = stats.selected_user %}
+                    <strong>{{ selected.display_name }} - {{ selected.watched_count }}/{{ selected.request_count }} ({{ selected.watched_percent }}%)</strong>
+                    {% endif %}
+                </span>
+                <span class="mobile-user-trigger-arrow" aria-hidden="true">&#9662;</span>
+            </button>
+            <div class="mobile-user-modal" id="mobile-user-modal" aria-hidden="true">
+                <div class="mobile-user-modal-header">
+                    <h2>Select User</h2>
+                    <div class="mobile-user-modal-actions">
+                        <span class="user-sort-controls">
+                            <button type="button" class="user-sort-button" data-sort-users="watched">Watched</button>
+                            <span>/</span>
+                            <button type="button" class="user-sort-button" data-sort-users="requests">Requests</button>
+                        </span>
+                        <button type="button" class="mobile-user-close" id="mobile-user-close" aria-label="Close">&times;</button>
+                    </div>
+                </div>
+                <div class="mobile-user-list">
+                    <a class="mobile-user-option {% if stats.selected_key == 'all' %}active{% endif %}" href="{{ url_for('stats', user='all', _anchor='selected-user-picker') }}" data-watched="{{ stats.total_watched }}" data-requests="{{ stats.total_requests }}">
+                        <strong>All Users</strong>
+                        <span>{{ stats.total_watched }}/{{ stats.total_requests }} watched ({{ stats.total_watched_percent }}%)</span>
+                        <span class="bar-track" aria-hidden="true">
+                            <span class="bar-fill" style="width: {{ stats.total_watched_percent }}%;"></span>
+                        </span>
+                    </a>
+                {% for user in stats.users %}
+                    <a class="mobile-user-option {% if stats.selected_key == user.key %}active{% endif %}" href="{{ url_for('stats', user=user.key, _anchor='selected-user-picker') }}" data-watched="{{ user.watched_count }}" data-requests="{{ user.request_count }}">
+                        <strong>{{ user.display_name }}</strong>
+                        <span>{{ user.watched_count }}/{{ user.request_count }} watched ({{ user.watched_percent }}%)</span>
+                        <span class="bar-track" aria-hidden="true">
+                            <span class="bar-fill" style="width: {{ user.watched_bar_percent }}%;"></span>
+                        </span>
+                    </a>
+                {% endfor %}
+                </div>
+            </div>
+        </div>
+        <div class="user-list" id="stats-user-list">
+            <a class="user-row {% if stats.selected_key == 'all' %}active{% endif %}" href="{{ url_for('stats', user='all') }}" data-watched="{{ stats.total_watched }}" data-requests="{{ stats.total_requests }}">
+                <span class="user-row-header">
+                    <span class="user-row-name">All Users</span>
+                    <span class="user-row-metrics">{{ stats.total_watched }}/{{ stats.total_requests }} - {{ stats.total_watched_percent }}%</span>
+                </span>
+                <span class="bar-track" aria-hidden="true">
+                    <span class="bar-fill" style="width: {{ stats.total_watched_percent }}%;"></span>
+                </span>
+            </a>
+            {% for user in stats.users %}
+            <a class="user-row {% if stats.selected_key == user.key %}active{% endif %}" href="{{ url_for('stats', user=user.key) }}" data-watched="{{ user.watched_count }}" data-requests="{{ user.request_count }}">
+                <span class="user-row-header">
+                    <span class="user-row-name">{{ user.display_name }}</span>
+                    <span class="user-row-metrics">{{ user.watched_count }}/{{ user.request_count }} - {{ user.watched_percent }}%</span>
+                </span>
+                {% if user.email and user.email != user.display_name %}
+                <span class="user-email">{{ user.email }}</span>
+                {% endif %}
+                <span class="bar-track" aria-hidden="true">
+                    <span class="bar-fill" style="width: {{ user.watched_bar_percent }}%;"></span>
+                </span>
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+
+    {% if stats.selected_key == "all" %}
+    <div class="card selected-user-card">
+        <div class="selected-user-heading">
+            <div>
+                <h2>All Users</h2>
+                <div class="user-email">Per-user stats summary</div>
+            </div>
+        </div>
+        <div class="table-wrapper">
+            <div class="table-controls" data-table="all-users-table">
+                <div class="table-meta"><span class="filtered-count">{{ stats.users|length }}</span> / {{ stats.users|length }} total</div>
+                <label>
+                    <input type="text" class="table-search" data-table="all-users-table" placeholder="Search...">
+                </label>
+                <label>Rows per page:
+                    <select class="page-size" data-table="all-users-table">
+                        <option value="5">5</option>
+                        <option value="10" selected>10</option>
+                        <option value="25">25</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                        <option value="all">All</option>
+                    </select>
+                </label>
+                <div class="pager" data-table="all-users-table">
+                    <button type="button" class="prev">Prev</button>
+                    <span class="page-info"></span>
+                    <button type="button" class="next">Next</button>
+                </div>
+            </div>
+            <div class="column-toggle" data-table="all-users-table">
+                <span>Columns:</span>
+                <label><input type="checkbox" data-column-toggle="1" checked> Requests</label>
+                <label><input type="checkbox" data-column-toggle="2" checked> Watched</label>
+                <label><input type="checkbox" data-column-toggle="3" checked> Reminders</label>
+                <label><input type="checkbox" data-column-toggle="4" checked> Watched After Reminder</label>
+                <label><input type="checkbox" data-column-toggle="5" checked> Reminder Success</label>
+                <label><input type="checkbox" data-column-toggle="6" checked> Not Watched</label>
+                <label><input type="checkbox" data-column-toggle="7" checked> Pending</label>
+                <label><input type="checkbox" data-column-toggle="8" checked> Skipped</label>
+            </div>
+            <table id="all-users-table">
+                <thead>
+                    <tr>
+                        <th class="sortable" data-sort-type="text">User</th>
+                        <th class="sortable" data-sort-type="number">Requests</th>
+                        <th class="sortable" data-sort-type="number">Watched</th>
+                        <th class="sortable" data-sort-type="number">Reminders</th>
+                        <th class="sortable" data-sort-type="number">Watched<br>After<br>Reminder</th>
+                        <th class="sortable" data-sort-type="number">Reminder<br>Success</th>
+                        <th class="sortable" data-sort-type="number">Not Watched</th>
+                        <th class="sortable" data-sort-type="number">Pending</th>
+                        <th class="sortable" data-sort-type="number">Skipped</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for user in stats.users %}
+                    <tr>
+                        <td><a href="{{ url_for('stats', user=user.key) }}" style="color:#c5cae9; font-weight:700;">{{ user.display_name }}</a></td>
+                        <td data-sort-value="{{ user.request_count }}">{{ user.request_count }}</td>
+                        <td data-sort-value="{{ user.watched_count }}">{{ user.watched_count }} ({{ user.watched_percent }}%)</td>
+                        <td data-sort-value="{{ user.reminder_sent_count }}">{{ user.reminder_sent_count }}</td>
+                        <td data-sort-value="{{ user.reminder_watched_count }}">{{ user.reminder_watched_count }}</td>
+                        <td data-sort-value="{{ user.reminder_success_percent }}">{{ user.reminder_success_percent }}%</td>
+                        <td data-sort-value="{{ user.not_watched_count }}">{{ user.not_watched_count }}</td>
+                        <td data-sort-value="{{ user.pending_count }}">{{ user.pending_count }}</td>
+                        <td data-sort-value="{{ user.skipped_count }}">{{ user.skipped_count }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% else %}
+    {% set selected = stats.selected_user %}
+    <div class="card selected-user-card">
+        <div class="selected-user-heading">
+            <div>
+                <h2>{{ selected.display_name }}</h2>
+                {% if selected.email %}
+                <div class="user-email">{{ selected.email }}</div>
+                {% endif %}
+            </div>
+            <span class="status-pill status-not-watched">{{ selected.not_watched_count }} not watched</span>
+        </div>
+
+        <div class="mini-metrics">
+            <div class="mini-metric">
+                <span>Requests</span>
+                <strong>{{ selected.request_count }}</strong>
+            </div>
+            <div class="mini-metric">
+                <span>Not Watched</span>
+                <strong>{{ selected.not_watched_count }}</strong>
+            </div>
+            <div class="mini-metric">
+                <span>Watched</span>
+                <strong>{{ selected.watched_count }}</strong>
+            </div>
+            <div class="mini-metric">
+                <span>Pending
+                    <span class="info-wrap">
+                        <button type="button" class="info-trigger" aria-label="Pending info">i</button>
+                        <span class="info-popover">These are requests that haven't been watched yet and haven't hit your DAYS_SINCE_REQUEST timeout.</span>
+                    </span>
+                </span>
+                <strong>{{ selected.pending_count }}</strong>
+            </div>
+            <div class="mini-metric">
+                <span>Skipped
+                    <span class="info-wrap">
+                        <button type="button" class="info-trigger" aria-label="Skipped info">i</button>
+                        <span class="info-popover">These are reminders you hit 'Don't Send' on.</span>
+                    </span>
+                </span>
+                <strong>{{ selected.skipped_count }}</strong>
+            </div>
+            <div class="mini-metric">
+                <span>Reminders</span>
+                <strong>{{ selected.reminder_sent_count }}</strong>
+            </div>
+            <div class="mini-metric">
+                <span>Watched After Reminder</span>
+                <strong>{{ selected.reminder_watched_count }}</strong>
+            </div>
+            <div class="mini-metric">
+                <span>Reminder Success</span>
+                <strong>{{ selected.reminder_success_percent }}%</strong>
+            </div>
+        </div>
+
+        <div class="table-wrapper">
+            <div class="table-controls" data-table="stats-detail-table">
+                <div class="table-meta"><span class="filtered-count">{{ selected.details|length }}</span> / {{ selected.details|length }} total</div>
+                <label>
+                    <input type="text" class="table-search" data-table="stats-detail-table" placeholder="Search...">
+                </label>
+                <label>Rows per page:
+                    <select class="page-size" data-table="stats-detail-table">
+                        <option value="5">5</option>
+                        <option value="10" selected>10</option>
+                        <option value="25">25</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                        <option value="all">All</option>
+                    </select>
+                </label>
+                <div class="pager" data-table="stats-detail-table">
+                    <button type="button" class="prev">Prev</button>
+                    <span class="page-info"></span>
+                    <button type="button" class="next">Next</button>
+                </div>
+            </div>
+            <table id="stats-detail-table">
+                <thead>
+                    <tr>
+                        <th class="sortable" data-sort-type="text">Title</th>
+                        <th class="sortable" data-sort-type="text">Media</th>
+                        <th class="sortable" data-sort-type="text">Status</th>
+                        <th class="sortable" data-sort-type="date">Added</th>
+                        <th class="sortable" data-sort-type="date">Reminder</th>
+                        <th class="sortable" data-sort-type="date">Watched</th>
+                        <th class="actions-col">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in selected.details %}
+                    <tr>
+                        <td>{{ item.title }}</td>
+                        <td>{{ item.media_type|title }}</td>
+                        <td><span class="status-pill status-{{ item.status_key }}">{{ item.status }}</span></td>
+                        <td data-sort-value="{{ item.media_added_sort }}">{{ item.media_added_display }}</td>
+                        <td data-sort-value="{{ item.reminder_sent_sort }}">{{ item.reminder_sent_display or "-" }}</td>
+                        <td data-sort-value="{{ item.watched_sort }}">{{ item.watched_display or "-" }}</td>
+                        <td class="actions-cell">
+                            {% if item.status_key in ["pending", "skipped"] and item.id %}
+                            <div class="action-menu">
+                                <button type="button" class="menu-trigger" aria-haspopup="true" aria-expanded="false">
+                                    <span class="sr-only">Actions</span>&#8942;
+                                </button>
+                                <div class="menu-dropdown" role="menu">
+                                    {% if item.status_key == "pending" %}
+                                    <form method="post" action="{{ url_for('skip_request', request_id=item.id) }}" class="menu-item-form">
+                                        <input type="hidden" name="next" value="stats">
+                                        <input type="hidden" name="user" value="{{ selected.key }}">
+                                        <button type="submit" class="menu-item-button" role="menuitem" data-double-confirm="true" data-second-text="Are you sure?">Don't Send</button>
+                                    </form>
+                                    {% endif %}
+                                    <form method="post" action="{{ url_for('send_request_now', request_id=item.id) }}" class="menu-item-form">
+                                        <input type="hidden" name="next" value="stats">
+                                        <input type="hidden" name="user" value="{{ selected.key }}">
+                                        <button type="submit" class="menu-item-button" role="menuitem" data-double-confirm="true" data-second-text="Are you sure?">{{ "Actually Do Send" if item.status_key == "skipped" else "Send Now" }}</button>
+                                    </form>
+                                </div>
+                            </div>
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% else %}
+<div class="card">
+    <h2>No Stats Yet</h2>
+    <p>No request records have been collected yet.</p>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+(function() {
+    initMobileUserPicker();
+    initInfoPopovers();
+    initUserSorting();
+    initActionMenus();
+    initColumnToggles();
+    initTable("stats-detail-table", 10);
+    initTable("all-users-table", 10);
+
+    function initMobileUserPicker() {
+        const trigger = document.getElementById("mobile-user-trigger");
+        const modal = document.getElementById("mobile-user-modal");
+        const close = document.getElementById("mobile-user-close");
+        if (!trigger || !modal || !close) { return; }
+
+        const openModal = () => {
+            modal.classList.add("open");
+            modal.setAttribute("aria-hidden", "false");
+            document.body.style.overflow = "hidden";
+            close.focus();
+        };
+        const closeModal = () => {
+            modal.classList.remove("open");
+            modal.setAttribute("aria-hidden", "true");
+            document.body.style.overflow = "";
+            trigger.focus();
+        };
+
+        trigger.addEventListener("click", openModal);
+        close.addEventListener("click", closeModal);
+        modal.addEventListener("click", (event) => {
+            if (event.target === modal) {
+                closeModal();
+            }
+        });
+        document.addEventListener("keydown", (event) => {
+            if (event.key === "Escape" && modal.classList.contains("open")) {
+                closeModal();
+            }
+        });
+    }
+
+    function initInfoPopovers() {
+        document.querySelectorAll(".info-trigger").forEach((trigger) => {
+            const popover = trigger.nextElementSibling;
+            if (!popover || !popover.classList.contains("info-popover")) { return; }
+            const updateArrow = () => {
+                const rect = trigger.getBoundingClientRect();
+                const viewportWidth = window.innerWidth;
+                const popoverWidth = Math.min(viewportWidth - 32, 360);
+                const triggerCenter = rect.left + (rect.width / 2);
+                const left = Math.min(Math.max(16, triggerCenter - (popoverWidth / 2)), viewportWidth - popoverWidth - 16);
+                const top = Math.min(rect.bottom + 12, window.innerHeight - 120);
+                const arrowLeft = Math.min(Math.max(triggerCenter - left, 24), popoverWidth - 24);
+                popover.style.setProperty("--info-popover-left", `${left}px`);
+                popover.style.setProperty("--info-popover-top", `${top}px`);
+                popover.style.setProperty("--info-arrow-left", `${arrowLeft}px`);
+            };
+            trigger.addEventListener("focus", updateArrow);
+            trigger.addEventListener("click", updateArrow);
+            trigger.addEventListener("mouseenter", updateArrow);
+        });
+    }
+
+    function initUserSorting() {
+        const list = document.getElementById("stats-user-list");
+        if (!list) { return; }
+        const buttons = Array.from(document.querySelectorAll("[data-sort-users]"));
+        const sortState = { key: "requests", direction: "desc" };
+
+        buttons.forEach((button) => {
+            button.addEventListener("click", () => {
+                const key = button.dataset.sortUsers;
+                if (sortState.key === key) {
+                    sortState.direction = sortState.direction === "desc" ? "asc" : "desc";
+                } else {
+                    sortState.key = key;
+                    sortState.direction = "desc";
+                }
+                buttons.forEach((item) => item.classList.toggle("active", item.dataset.sortUsers === key));
+                sortUsers(key, sortState.direction);
+            });
+        });
+
+        function sortUsers(key, direction) {
+            const rows = Array.from(list.querySelectorAll(".user-row"));
+            const mobileRows = Array.from(document.querySelectorAll(".mobile-user-option"));
+            const multiplier = direction === "desc" ? -1 : 1;
+            const compare = (rowA, rowB) => {
+                const valueA = parseInt(rowA.dataset[key] || "0", 10);
+                const valueB = parseInt(rowB.dataset[key] || "0", 10);
+                if (valueA !== valueB) {
+                    return (valueA - valueB) * multiplier;
+                }
+                const tieA = parseInt(rowA.dataset.requests || "0", 10);
+                const tieB = parseInt(rowB.dataset.requests || "0", 10);
+                if (tieA !== tieB) {
+                    return tieB - tieA;
+                }
+                return rowA.textContent.localeCompare(rowB.textContent, undefined, { sensitivity: "base" });
+            };
+            rows.sort(compare);
+            rows.forEach((row) => list.appendChild(row));
+            const mobileList = document.querySelector(".mobile-user-list");
+            if (mobileList) {
+                mobileRows.sort(compare);
+                mobileRows.forEach((row) => mobileList.appendChild(row));
+            }
+        }
+    }
+
+    function initActionMenus() {
+        const menus = Array.from(document.querySelectorAll(".action-menu"));
+        let openMenu = null;
+
+        function resetDoubleConfirm(menu) {
+            if (!menu) { return; }
+            menu.querySelectorAll('.menu-item-button[data-double-confirm="true"]').forEach((button) => {
+                if (button.dataset.originalText) {
+                    button.textContent = button.dataset.originalText;
+                }
+                button.classList.remove("confirming");
+                delete button.dataset.confirmState;
+            });
+        }
+
+        function closeMenu(menu) {
+            if (!menu) { return; }
+            resetDoubleConfirm(menu);
+            menu.classList.remove("open");
+            const trigger = menu.querySelector(".menu-trigger");
+            if (trigger) {
+                trigger.setAttribute("aria-expanded", "false");
+            }
+            if (openMenu === menu) {
+                openMenu = null;
+            }
+        }
+
+        menus.forEach((menu) => {
+            const trigger = menu.querySelector(".menu-trigger");
+            if (!trigger) { return; }
+            menu.addEventListener("click", (event) => event.stopPropagation());
+            trigger.addEventListener("click", (event) => {
+                event.preventDefault();
+                if (menu.classList.contains("open")) {
+                    closeMenu(menu);
+                } else {
+                    if (openMenu && openMenu !== menu) {
+                        closeMenu(openMenu);
+                    }
+                    openMenu = menu;
+                    menu.classList.add("open");
+                    trigger.setAttribute("aria-expanded", "true");
+                }
+            });
+        });
+
+        document.addEventListener("click", () => closeMenu(openMenu));
+        document.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") {
+                closeMenu(openMenu);
+            }
+        });
+
+        document.querySelectorAll(".menu-item-form").forEach((form) => {
+            const button = form.querySelector(".menu-item-button");
+            if (!button || button.dataset.doubleConfirm !== "true") { return; }
+            button.addEventListener("click", (event) => {
+                if (button.dataset.confirmState === "armed") {
+                    button.textContent = button.dataset.originalText || button.textContent;
+                    button.classList.remove("confirming");
+                    delete button.dataset.confirmState;
+                    return;
+                }
+                event.preventDefault();
+                button.dataset.originalText = button.dataset.originalText || button.textContent;
+                button.dataset.confirmState = "armed";
+                button.textContent = button.dataset.secondText || "Are you sure?";
+                button.classList.add("confirming");
+            });
+        });
+    }
+
+    function initColumnToggles() {
+        document.querySelectorAll(".column-toggle").forEach((group) => {
+            const tableId = group.dataset.table;
+            const table = document.getElementById(tableId);
+            if (!table) { return; }
+            group.querySelectorAll("[data-column-toggle]").forEach((checkbox) => {
+                const columnIndex = parseInt(checkbox.dataset.columnToggle, 10);
+                const update = () => {
+                    table.querySelectorAll("tr").forEach((row) => {
+                        const cell = row.children[columnIndex];
+                        if (cell) {
+                            cell.classList.toggle("col-hidden", !checkbox.checked);
+                        }
+                    });
+                };
+                checkbox.addEventListener("change", update);
+                update();
+            });
+        });
+    }
+
+    function initTable(tableId, defaultSize) {
+        const table = document.getElementById(tableId);
+        if (!table) { return; }
+        const tbody = table.tBodies[0];
+        let allRows = Array.from(tbody.querySelectorAll("tr"));
+        let rows = allRows;
+        let currentPage = 1;
+        const sortState = { index: -1, direction: "asc" };
+        const columnFilters = {};
+
+        const controls = document.querySelector(`.table-controls[data-table="${tableId}"]`);
+        const pager = document.querySelector(`.pager[data-table="${tableId}"]`);
+        const pageInfo = pager ? pager.querySelector(".page-info") : null;
+        const prevBtn = pager ? pager.querySelector(".prev") : null;
+        const nextBtn = pager ? pager.querySelector(".next") : null;
+        const sizeSelect = document.querySelector(`.page-size[data-table="${tableId}"]`);
+        const searchInput = document.querySelector(`.table-search[data-table="${tableId}"]`);
+        const filteredCount = controls ? controls.querySelector(".filtered-count") : null;
+        const headers = Array.from(table.querySelectorAll("thead th.sortable"));
+
+        if (!sizeSelect || allRows.length === 0) { return; }
+
+        sizeSelect.value = String(defaultSize);
+        let pageSize = resolvePageSize(sizeSelect.value);
+
+        headers.forEach((header, index) => {
+            header.tabIndex = 0;
+            header.addEventListener("click", () => toggleSort(index, header.dataset.sortType || "text"));
+            header.addEventListener("keydown", (event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    toggleSort(index, header.dataset.sortType || "text");
+                }
+            });
+        });
+
+        if (searchInput) {
+            searchInput.addEventListener("input", applyFilters);
+        }
+        sizeSelect.addEventListener("change", (event) => {
+            pageSize = resolvePageSize(event.target.value);
+            currentPage = 1;
+            render();
+        });
+        if (prevBtn) {
+            prevBtn.addEventListener("click", () => {
+                if (currentPage > 1) {
+                    currentPage -= 1;
+                    render();
+                }
+            });
+        }
+        if (nextBtn) {
+            nextBtn.addEventListener("click", () => {
+                const totalPages = pageSize === Infinity ? 1 : Math.max(1, Math.ceil(rows.length / pageSize));
+                if (currentPage < totalPages) {
+                    currentPage += 1;
+                    render();
+                }
+            });
+        }
+
+        initColumnFilters();
+        render();
+
+        function resolvePageSize(value) {
+            return value === "all" ? Infinity : parseInt(value, 10);
+        }
+
+        function applyFilters() {
+            let filtered = allRows;
+            if (searchInput && searchInput.value.trim()) {
+                const query = searchInput.value.toLowerCase().trim();
+                filtered = filtered.filter((row) => row.textContent.toLowerCase().includes(query));
+            }
+            Object.keys(columnFilters).forEach((colIndex) => {
+                const activeValues = columnFilters[colIndex];
+                if (activeValues && activeValues.size > 0) {
+                    filtered = filtered.filter((row) => {
+                        const cell = row.cells[colIndex];
+                        return cell && activeValues.has((cell.textContent || "").trim());
+                    });
+                }
+            });
+            rows = filtered;
+            currentPage = 1;
+            if (filteredCount) {
+                filteredCount.textContent = filtered.length;
+            }
+            render();
+        }
+
+        function initColumnFilters() {
+            let backdrop = document.getElementById("filter-backdrop");
+            if (!backdrop) {
+                backdrop = document.createElement("div");
+                backdrop.id = "filter-backdrop";
+                backdrop.className = "filter-backdrop";
+                document.body.appendChild(backdrop);
+                backdrop.addEventListener("click", closeFilters);
+            }
+
+            headers.forEach((header, columnIndex) => {
+                const filterDropdown = document.createElement("div");
+                filterDropdown.className = "filter-dropdown";
+                const filterTrigger = document.createElement("button");
+                filterTrigger.className = "filter-trigger";
+                filterTrigger.innerHTML = "&#9662;";
+                filterTrigger.type = "button";
+                filterTrigger.title = "Filter";
+                const filterMenu = document.createElement("div");
+                filterMenu.className = "filter-menu";
+                const menuHeader = document.createElement("div");
+                menuHeader.className = "filter-menu-header";
+                const selectAllBtn = document.createElement("button");
+                selectAllBtn.type = "button";
+                selectAllBtn.textContent = "All";
+                const clearBtn = document.createElement("button");
+                clearBtn.type = "button";
+                clearBtn.textContent = "Clear";
+                const optionsContainer = document.createElement("div");
+
+                menuHeader.appendChild(selectAllBtn);
+                menuHeader.appendChild(clearBtn);
+                filterMenu.appendChild(menuHeader);
+                filterMenu.appendChild(optionsContainer);
+                filterDropdown.appendChild(filterTrigger);
+                filterDropdown.appendChild(filterMenu);
+                header.appendChild(filterDropdown);
+
+                filterTrigger.addEventListener("click", (event) => {
+                    event.stopPropagation();
+                    const wasOpen = filterDropdown.classList.contains("open");
+                    closeFilters();
+                    if (!wasOpen) {
+                        rebuildOptions();
+                        filterDropdown.classList.add("open");
+                        backdrop.classList.add("active");
+                        positionFilterMenu(filterTrigger, filterMenu);
+                    }
+                });
+                selectAllBtn.addEventListener("click", () => {
+                    optionsContainer.querySelectorAll("input").forEach((checkbox) => {
+                        checkbox.checked = true;
+                    });
+                    updateColumnFilter();
+                });
+                clearBtn.addEventListener("click", () => {
+                    optionsContainer.querySelectorAll("input").forEach((checkbox) => {
+                        checkbox.checked = false;
+                    });
+                    updateColumnFilter();
+                });
+
+                function rebuildOptions() {
+                    const values = new Set();
+                    allRows.forEach((row) => {
+                        const cell = row.cells[columnIndex];
+                        const value = cell ? (cell.textContent || "").trim() : "";
+                        if (value) { values.add(value); }
+                    });
+                    optionsContainer.innerHTML = "";
+                    Array.from(values).sort().forEach((value) => {
+                        const option = document.createElement("div");
+                        option.className = "filter-option";
+                        const checkbox = document.createElement("input");
+                        checkbox.type = "checkbox";
+                        checkbox.checked = !columnFilters[columnIndex] || columnFilters[columnIndex].has(value);
+                        const label = document.createElement("label");
+                        label.textContent = value;
+                        label.title = value;
+                        option.appendChild(checkbox);
+                        option.appendChild(label);
+                        optionsContainer.appendChild(option);
+                        option.addEventListener("click", (event) => {
+                            if (event.target !== checkbox) {
+                                checkbox.checked = !checkbox.checked;
+                            }
+                            updateColumnFilter();
+                        });
+                        checkbox.addEventListener("change", updateColumnFilter);
+                    });
+                }
+
+                function updateColumnFilter() {
+                    const checkedValues = new Set();
+                    let allChecked = true;
+                    optionsContainer.querySelectorAll("input").forEach((checkbox) => {
+                        const value = checkbox.nextElementSibling ? checkbox.nextElementSibling.textContent : "";
+                        if (checkbox.checked) {
+                            checkedValues.add(value);
+                        } else {
+                            allChecked = false;
+                        }
+                    });
+                    if (allChecked || checkedValues.size === 0) {
+                        delete columnFilters[columnIndex];
+                        filterTrigger.classList.remove("active");
+                    } else {
+                        columnFilters[columnIndex] = checkedValues;
+                        filterTrigger.classList.add("active");
+                    }
+                    applyFilters();
+                }
+            });
+        }
+
+        function positionFilterMenu(trigger, menu) {
+            if (window.innerWidth <= 900) {
+                menu.style.position = "";
+                menu.style.left = "";
+                menu.style.right = "";
+                menu.style.top = "";
+                menu.style.maxWidth = "";
+                menu.style.maxHeight = "";
+                return;
+            }
+
+            setTimeout(() => {
+                const padding = 16;
+                const triggerRect = trigger.getBoundingClientRect();
+                const viewportWidth = window.innerWidth;
+                const viewportHeight = window.innerHeight;
+                const menuWidth = Math.min(menu.offsetWidth || 220, viewportWidth - (padding * 2));
+                const preferredLeft = triggerRect.left;
+                const clampedLeft = Math.min(
+                    Math.max(padding, preferredLeft),
+                    viewportWidth - menuWidth - padding
+                );
+                const availableHeight = Math.max(140, viewportHeight - triggerRect.bottom - padding);
+
+                menu.style.position = "fixed";
+                menu.style.left = `${clampedLeft}px`;
+                menu.style.right = "auto";
+                menu.style.top = `${triggerRect.bottom + 4}px`;
+                menu.style.maxWidth = `${menuWidth}px`;
+                menu.style.maxHeight = `${Math.min(availableHeight, 400)}px`;
+            }, 0);
+        }
+
+        function closeFilters() {
+            document.querySelectorAll(".filter-dropdown.open").forEach((dropdown) => {
+                dropdown.classList.remove("open");
+            });
+            const backdrop = document.getElementById("filter-backdrop");
+            if (backdrop) {
+                backdrop.classList.remove("active");
+            }
+        }
+
+        function render() {
+            const totalPages = pageSize === Infinity ? 1 : Math.max(1, Math.ceil(rows.length / pageSize));
+            if (currentPage > totalPages) {
+                currentPage = totalPages;
+            }
+            const start = pageSize === Infinity ? 0 : (currentPage - 1) * pageSize;
+            const end = pageSize === Infinity ? rows.length : start + pageSize;
+            allRows.forEach((row) => {
+                row.style.display = "none";
+            });
+            rows.forEach((row, index) => {
+                row.style.display = index >= start && index < end ? "" : "none";
+            });
+            if (pager && pageInfo) {
+                pager.style.display = totalPages <= 1 ? "none" : "flex";
+                pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+                if (prevBtn) { prevBtn.disabled = currentPage === 1; }
+                if (nextBtn) { nextBtn.disabled = currentPage === totalPages; }
+            }
+        }
+
+        function toggleSort(columnIndex, sortType) {
+            const direction = sortState.index === columnIndex && sortState.direction === "asc" ? "desc" : "asc";
+            sortState.index = columnIndex;
+            sortState.direction = direction;
+            allRows.sort((a, b) => compareRows(a, b, columnIndex, sortType, direction));
+            allRows.forEach((row) => tbody.appendChild(row));
+            applyFilters();
+        }
+
+        function compareRows(rowA, rowB, columnIndex, sortType, direction) {
+            const valueA = extractValue(rowA, columnIndex);
+            const valueB = extractValue(rowB, columnIndex);
+            const multiplier = direction === "asc" ? 1 : -1;
+            if (sortType === "date") {
+                const aTime = parseDate(valueA);
+                const bTime = parseDate(valueB);
+                if (!Number.isNaN(aTime) || !Number.isNaN(bTime)) {
+                    const safeA = Number.isNaN(aTime) ? (direction === "asc" ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY) : aTime;
+                    const safeB = Number.isNaN(bTime) ? (direction === "asc" ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY) : bTime;
+                    return (safeA - safeB) * multiplier;
+                }
+            }
+            if (sortType === "number") {
+                const aNum = parseFloat(valueA);
+                const bNum = parseFloat(valueB);
+                if (!Number.isNaN(aNum) || !Number.isNaN(bNum)) {
+                    const safeA = Number.isNaN(aNum) ? (direction === "asc" ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY) : aNum;
+                    const safeB = Number.isNaN(bNum) ? (direction === "asc" ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY) : bNum;
+                    return (safeA - safeB) * multiplier;
+                }
+            }
+            return valueA.localeCompare(valueB, undefined, { sensitivity: "base" }) * multiplier;
+        }
+
+        function extractValue(row, columnIndex) {
+            const cell = row.cells[columnIndex];
+            if (!cell) { return ""; }
+            return (cell.dataset.sortValue || cell.textContent || "").trim();
+        }
+
+        function parseDate(value) {
+            if (!value) { return Number.NaN; }
+            return Date.parse(value.includes("T") ? value : value.replace(" ", "T"));
+        }
+    }
+})();
+</script>
+{% endblock %}

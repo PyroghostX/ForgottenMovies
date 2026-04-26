@@ -253,6 +253,129 @@
     .hidden {
         display: none !important;
     }
+    .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 1rem;
+        margin: 1rem 0 1.25rem;
+    }
+    .summary-stat {
+        background: #171717;
+        border: 1px solid #2d2d2d;
+        border-radius: 8px;
+        padding: 0.9rem;
+    }
+    .summary-stat span {
+        display: block;
+        color: #c5cae9;
+        font-size: 0.8rem;
+        font-weight: 700;
+    }
+    .summary-stat strong {
+        display: block;
+        margin-top: 0.3rem;
+        font-size: 1.75rem;
+        line-height: 1;
+    }
+    .stats-cta {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 48px;
+        padding: 0.8rem 1.2rem;
+        border-radius: 8px;
+        background: #3f51b5;
+        color: #fff;
+        font-weight: 800;
+        text-decoration: none;
+    }
+    .stats-cta:hover {
+        background: #5c6bc0;
+    }
+    .info-wrap {
+        position: relative;
+        display: inline-flex !important;
+        align-items: center;
+        margin-left: 0.25rem;
+    }
+    .info-trigger {
+        width: 18px;
+        height: 18px;
+        border-radius: 999px;
+        border: 1px solid #555;
+        background: #2a2a2a;
+        color: #c5cae9;
+        font-size: 0.72rem;
+        font-weight: 800;
+        line-height: 1;
+        cursor: pointer;
+        padding: 0;
+    }
+    .info-popover {
+        display: none !important;
+        position: absolute;
+        left: 0;
+        bottom: 130%;
+        width: min(260px, calc(100vw - 40px));
+        background: #2a2a2a;
+        color: #f5f5f5;
+        border: 1px solid #555;
+        border-radius: 8px;
+        padding: 0.65rem;
+        font-size: 0.82rem;
+        font-weight: 600;
+        line-height: 1.35;
+        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+        z-index: 40;
+    }
+    .info-wrap:hover .info-popover,
+    .info-trigger:focus + .info-popover {
+        display: block !important;
+    }
+    @media (max-width: 900px) {
+        .summary-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
+    @media (max-width: 520px) {
+        .info-popover {
+            position: fixed;
+            left: var(--info-popover-left, 1rem);
+            right: auto;
+            top: var(--info-popover-top, 6rem);
+            bottom: auto;
+            transform: none;
+            width: calc(100vw - 2rem);
+            max-width: none;
+            max-height: calc(100vh - 2rem);
+            overflow-y: auto;
+        }
+        .info-popover::before {
+            content: "";
+            position: absolute;
+            top: -9px;
+            left: var(--info-arrow-left, 50%);
+            transform: translateX(-50%) rotate(45deg);
+            width: 16px;
+            height: 16px;
+            background: #2a2a2a;
+            border-left: 1px solid #555;
+            border-top: 1px solid #555;
+        }
+        .summary-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.75rem;
+        }
+        .summary-stat {
+            padding: 0.75rem;
+        }
+        .summary-stat strong {
+            font-size: 1.25rem;
+        }
+        .stats-cta {
+            width: 100%;
+        }
+    }
 </style>
 {% endblock %}
 
@@ -263,13 +386,47 @@
     <a href="{{ url_for('settings') }}" style="color:#c5cae9; text-decoration: underline;">Enable in Settings</a>
 </div>
 {% endif %}
-<div class="card" id="run-now-card">
-    <h2>Run Now</h2>
-    <p>Kick off the Forgotten Movies check immediately instead of waiting for the next schedule.</p>
-    <p>This will first check overseerr for new requests then check tautulli for unwatched old requests and then email users.</p>
-    <form method="post" action="{{ url_for('run_now') }}">
-        <button type="submit">Run Job Now</button>
-    </form>
+<div class="card" id="stats-summary-card">
+    <h2>Stats Summary</h2>
+    <div class="summary-grid">
+        <div class="summary-stat">
+            <span>Requests</span>
+            <strong>{{ stats_summary.total_requests }}</strong>
+        </div>
+        <div class="summary-stat">
+            <span>Watched</span>
+            <strong>{{ stats_summary.total_watched }} ({{ stats_summary.total_watched_percent }}%)</strong>
+        </div>
+        <div class="summary-stat">
+            <span>Not Watched</span>
+            <strong>{{ stats_summary.total_not_watched }} ({{ stats_summary.total_not_watched_percent }}%)</strong>
+        </div>
+        <div class="summary-stat">
+            <span>Pending/Skipped
+                <span class="info-wrap">
+                    <button type="button" class="info-trigger" aria-label="Pending and skipped info">i</button>
+                    <span class="info-popover">
+                        <strong>Pending:</strong> These are requests that haven't been watched yet and haven't hit your DAYS_SINCE_REQUEST timeout.<br>
+                        <strong>Skipped:</strong> These are reminders you hit 'Don't Send' on.
+                    </span>
+                </span>
+            </span>
+            <strong>{{ stats_summary.total_pending + stats_summary.total_skipped }}</strong>
+        </div>
+        <div class="summary-stat">
+            <span>Reminders Sent</span>
+            <strong>{{ stats_summary.total_reminders_sent }}</strong>
+        </div>
+        <div class="summary-stat">
+            <span>Watched After Reminder</span>
+            <strong>{{ stats_summary.total_reminders_watched }}</strong>
+        </div>
+        <div class="summary-stat">
+            <span>Reminder Success</span>
+            <strong>{{ stats_summary.total_reminder_success_percent }}%</strong>
+        </div>
+    </div>
+    <a class="stats-cta" href="{{ url_for('stats') }}">View More Stats</a>
 </div>
 <div class="card" id="todo-card">
     <h2>Upcoming Reminders</h2>
@@ -314,6 +471,7 @@
                     <th class="sortable" data-sort-type="text">Plex User</th>
                     <th class="sortable" data-sort-type="text">Email</th>
                     <th class="sortable" data-sort-type="date">Media Added</th>
+                    <th class="sortable" data-sort-type="date">Estimated Send</th>
                     <th class="actions-col">Actions</th>
                 </tr>
             </thead>
@@ -325,6 +483,7 @@
                     <td>{{ item.plex_username }}</td>
                     <td>{{ item.email }}</td>
                     <td data-sort-value="{{ item.media_added_sort }}">{{ item.created_at_display }}</td>
+                    <td data-sort-value="{{ item.estimated_send_sort }}">{{ item.estimated_send_display }}</td>
                     <td class="actions-cell">
                         <div class="action-menu">
                             <button type="button" class="menu-trigger" aria-haspopup="true" aria-expanded="false">
@@ -484,6 +643,26 @@
 {% block extra_scripts %}
 <script>
 (function() {
+    document.querySelectorAll(".info-trigger").forEach((trigger) => {
+        const popover = trigger.nextElementSibling;
+        if (!popover || !popover.classList.contains("info-popover")) { return; }
+        const updateArrow = () => {
+            const rect = trigger.getBoundingClientRect();
+            const viewportWidth = window.innerWidth;
+            const popoverWidth = Math.min(viewportWidth - 32, 360);
+            const triggerCenter = rect.left + (rect.width / 2);
+            const left = Math.min(Math.max(16, triggerCenter - (popoverWidth / 2)), viewportWidth - popoverWidth - 16);
+            const top = Math.min(rect.bottom + 12, window.innerHeight - 120);
+            const arrowLeft = Math.min(Math.max(triggerCenter - left, 24), popoverWidth - 24);
+            popover.style.setProperty("--info-popover-left", `${left}px`);
+            popover.style.setProperty("--info-popover-top", `${top}px`);
+            popover.style.setProperty("--info-arrow-left", `${arrowLeft}px`);
+        };
+        trigger.addEventListener("focus", updateArrow);
+        trigger.addEventListener("click", updateArrow);
+        trigger.addEventListener("mouseenter", updateArrow);
+    });
+
     const flashContainers = Array.from(document.querySelectorAll(".local-flashes"));
     flashContainers.forEach((localContainer) => {
         const localMessages = Array.from(localContainer.querySelectorAll(".message"));

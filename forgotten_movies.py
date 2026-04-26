@@ -44,6 +44,8 @@ HOURS_BETWEEN_EMAILS_EMAIL_TEXT = os.getenv("HOURS_BETWEEN_EMAILS_EMAIL_TEXT", f
 DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
 DEBUG_EMAIL = os.getenv("DEBUG_EMAIL")
 DEBUG_MAX_EMAILS = int(os.getenv("DEBUG_MAX_EMAILS", 2))
+TAUTULLI_NEW_REQUEST_METADATA_LIMIT = int(os.getenv("TAUTULLI_NEW_REQUEST_METADATA_LIMIT", 50))
+JOB_INTERVAL_SECONDS = int(os.getenv("JOB_INTERVAL_SECONDS", 600))
 
 
 REQUIRED_ENV = {
@@ -289,9 +291,27 @@ def _resolve_media_added(rec: dict) -> tuple[datetime, str | None]:
     return datetime.min, None
 
 
+def _estimate_request_send_at(rec: dict, queued_before_for_email: int = 0, now_dt: datetime | None = None) -> datetime:
+    now_dt = now_dt or datetime.now()
+    estimated = now_dt
+    email_value = (rec.get("email") or "").strip()
+    user_record = get_email_user(email_value) if email_value else None
+    if user_record:
+        next_allowed = _parse_iso(user_record.get("next_email_at"))
+        if next_allowed != datetime.min and next_allowed > estimated:
+            estimated = next_allowed
+    if not rec.get("eligible_for_email", False):
+        estimated = max(estimated, now_dt + timedelta(seconds=JOB_INTERVAL_SECONDS))
+    if queued_before_for_email > 0:
+        estimated = estimated + timedelta(hours=HOURS_BETWEEN_EMAILS * queued_before_for_email)
+    return estimated
+
+
 def get_overdue_requests_for_ui():
     threshold = datetime.now() - timedelta(days=DAYS_SINCE_REQUEST)
-    items = []
+    candidates = []
+    queued_by_email: dict[str, int] = {}
+    scheduler_paused = is_scheduler_disabled()
     for rec in request_db.all():
         if rec.get("tautulli_watch_date"):
             continue
@@ -309,6 +329,17 @@ def get_overdue_requests_for_ui():
         media_dt, media_raw = _resolve_media_added(rec)
         if media_dt == datetime.min or media_dt > threshold:
             continue
+        candidates.append((media_dt, media_raw, rec, title, email_value))
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    items = []
+    for media_dt, media_raw, rec, title, email_value in candidates:
+        email_key = email_value.lower()
+        queued_before = queued_by_email.get(email_key, 0)
+        queued_by_email[email_key] = queued_before + 1
+        estimated_send_at = _estimate_request_send_at(rec, queued_before)
+        estimated_send_display = "Paused" if scheduler_paused else estimated_send_at.strftime("%Y-%m-%d %H:%M")
+        estimated_send_sort = "" if scheduler_paused else estimated_send_at.isoformat()
         created_display = media_dt.strftime("%Y-%m-%d %H:%M") if media_dt != datetime.min else (media_raw or "")
         items.append(
             {
@@ -319,6 +350,8 @@ def get_overdue_requests_for_ui():
                 "email": rec.get("email", ""),
                 "created_at_display": created_display,
                 "media_added_sort": media_dt.isoformat() if media_dt != datetime.min else (media_raw or ""),
+                "estimated_send_display": estimated_send_display,
+                "estimated_send_sort": estimated_send_sort,
                 "_sort": media_dt or datetime.max,
             }
         )
@@ -378,6 +411,207 @@ def get_recent_sent_emails(limit: int | None = None):
     for item in items:
         item.pop("_sort", None)
     return items
+
+
+def _date_display(value: str | None) -> str:
+    parsed = _parse_iso(value)
+    if parsed != datetime.min:
+        return parsed.strftime("%Y-%m-%d %H:%M")
+    return value or ""
+
+
+def _extract_seer_title(request: dict, media: dict) -> str:
+    candidates = (
+        media.get("title"),
+        media.get("name"),
+        media.get("originalTitle"),
+        media.get("originalName"),
+        request.get("title"),
+        request.get("name"),
+    )
+    for value in candidates:
+        if value not in (None, "", "Unknown"):
+            return str(value)
+    return "Unknown"
+
+
+def _resolve_title_for_new_request(request: dict, media: dict, rating_key) -> tuple[str, bool]:
+    title = _extract_seer_title(request, media)
+    if title != "Unknown" or not rating_key:
+        return title, False
+
+    metadata = get_tautulli_metadata(rating_key)
+    title = metadata.get("title") or metadata.get("grandparent_title") or metadata.get("parent_title") or "Unknown"
+    return title, True
+
+
+def get_user_stats(selected_user: str | None = None) -> dict:
+    email_records = email_db.all()
+    email_records_by_key: dict[tuple[str, str], dict] = {}
+    email_records_by_rating: dict[tuple[str, str], dict] = {}
+    reminder_stats_by_email: dict[str, dict[str, int]] = {}
+    for rec in email_records:
+        email_value = (rec.get("email") or "").strip().lower()
+        tmdb_id = str(rec.get("tmdbId") or "")
+        rating_key = str(rec.get("rating_key") or "")
+        if email_value:
+            reminder_stats = reminder_stats_by_email.setdefault(email_value, {"sent": 0, "watched": 0})
+            reminder_stats["sent"] += 1
+            if rec.get("date_watched"):
+                reminder_stats["watched"] += 1
+        if email_value and tmdb_id:
+            email_records_by_key[(email_value, tmdb_id)] = rec
+        if email_value and rating_key:
+            email_records_by_rating[(email_value, rating_key)] = rec
+
+    users: dict[str, dict] = {}
+    threshold = datetime.now() - timedelta(days=DAYS_SINCE_REQUEST)
+
+    for rec in request_db.all():
+        email_value = (rec.get("email") or "").strip().lower()
+        plex_username = (rec.get("plexUsername") or "").strip()
+        user_key = email_value or plex_username.lower()
+        if not user_key:
+            continue
+
+        user = users.setdefault(
+            user_key,
+            {
+                "key": user_key,
+                "email": email_value,
+                "plex_username": plex_username,
+                "request_count": 0,
+                "reminder_sent_count": 0,
+                "reminder_watched_count": 0,
+                "reminder_success_percent": 0,
+                "watched_count": 0,
+                "not_watched_count": 0,
+                "skipped_count": 0,
+                "pending_count": 0,
+                "details": [],
+            },
+        )
+        if plex_username and not user.get("plex_username"):
+            user["plex_username"] = plex_username
+        if email_value and not user.get("email"):
+            user["email"] = email_value
+
+        tmdb_id = str(rec.get("tmdbId") or "")
+        rating_key = str(rec.get("ratingkey") or "")
+        email_record = email_records_by_key.get((email_value, tmdb_id))
+        if not email_record and rating_key:
+            email_record = email_records_by_rating.get((email_value, rating_key))
+
+        media_dt, media_raw = _resolve_media_added(rec)
+        media_added_sort = media_dt.isoformat() if media_dt != datetime.min else (media_raw or "")
+        watched_at = rec.get("tautulli_watch_date") or (email_record or {}).get("date_watched")
+        reminder_sent_at = (email_record or {}).get("email_sent_at")
+        reminder_sent = bool(email_record or rec.get("email_sent"))
+
+        if rec.get("skip_email"):
+            status = "Skipped"
+            status_key = "skipped"
+            user["skipped_count"] += 1
+        elif watched_at:
+            status = "Watched"
+            status_key = "watched"
+            user["watched_count"] += 1
+        elif reminder_sent:
+            status = "Not watched"
+            status_key = "not-watched"
+            user["not_watched_count"] += 1
+        elif media_dt != datetime.min and media_dt <= threshold:
+            status = "Pending reminder"
+            status_key = "pending"
+            user["pending_count"] += 1
+        else:
+            status = "Not due"
+            status_key = "not-due"
+            user["pending_count"] += 1
+
+        user["request_count"] += 1
+        if reminder_sent:
+            user["reminder_sent_count"] += 1
+
+        user["details"].append(
+            {
+                "id": rec.get("id"),
+                "title": rec.get("title") or (email_record or {}).get("title") or "Unknown",
+                "media_type": rec.get("mediaType") or (email_record or {}).get("mediaType") or "",
+                "status": status,
+                "status_key": status_key,
+                "media_added_display": _date_display(media_raw),
+                "media_added_sort": media_added_sort,
+                "reminder_sent_display": _date_display(reminder_sent_at),
+                "reminder_sent_sort": _parse_iso(reminder_sent_at).isoformat()
+                if _parse_iso(reminder_sent_at) != datetime.min
+                else "",
+                "watched_display": _date_display(watched_at),
+                "watched_sort": _parse_iso(watched_at).isoformat()
+                if _parse_iso(watched_at) != datetime.min
+                else "",
+                "_sort": media_dt,
+            }
+        )
+
+    for user in users.values():
+        user["details"].sort(key=lambda item: item["_sort"], reverse=True)
+        for item in user["details"]:
+            item.pop("_sort", None)
+
+        request_count = user["request_count"]
+        watched_count = user["watched_count"]
+        email_value = user.get("email") or ""
+        reminder_stats = reminder_stats_by_email.get(email_value, {"sent": 0, "watched": 0})
+        sent_count = reminder_stats["sent"]
+        reminder_watched_count = reminder_stats["watched"]
+        unresolved_count = user["pending_count"] + user["skipped_count"]
+        user["reminder_sent_count"] = sent_count
+        user["reminder_watched_count"] = reminder_watched_count
+        user["reminder_success_percent"] = round((reminder_watched_count / sent_count) * 100) if sent_count else 0
+        user["watched_percent"] = round((watched_count / request_count) * 100) if request_count else 0
+        user["reminder_percent"] = round((sent_count / request_count) * 100) if request_count else 0
+        user["unresolved_count"] = unresolved_count
+        user["display_name"] = user.get("plex_username") or user.get("email") or user["key"]
+
+    summaries = sorted(
+        users.values(),
+        key=lambda item: (-item["request_count"], -item["not_watched_count"], item["display_name"].lower()),
+    )
+    for item in summaries:
+        item["watched_bar_percent"] = item["watched_percent"]
+
+    selected_key = (selected_user or "").strip().lower()
+    selected = None if selected_key == "all" else users.get(selected_key)
+    if selected is None and summaries:
+        if selected_key != "all":
+            selected = summaries[0]
+            selected_key = selected["key"]
+
+    total_requests = sum(item["request_count"] for item in summaries)
+    total_watched = sum(item["watched_count"] for item in summaries)
+    total_not_watched = sum(item["not_watched_count"] for item in summaries)
+    total_reminders_sent = len(email_records)
+    total_reminders_watched = sum(1 for rec in email_records if rec.get("date_watched"))
+
+    return {
+        "users": summaries,
+        "selected_user": selected,
+        "selected_key": selected_key,
+        "total_requests": total_requests,
+        "total_users": len(summaries),
+        "total_not_watched": total_not_watched,
+        "total_not_watched_percent": round((total_not_watched / total_requests) * 100) if total_requests else 0,
+        "total_watched": total_watched,
+        "total_watched_percent": round((total_watched / total_requests) * 100) if total_requests else 0,
+        "total_pending": sum(item["pending_count"] for item in summaries),
+        "total_skipped": sum(item["skipped_count"] for item in summaries),
+        "total_reminders_sent": total_reminders_sent,
+        "total_reminders_watched": total_reminders_watched,
+        "total_reminder_success_percent": round((total_reminders_watched / total_reminders_sent) * 100)
+        if total_reminders_sent
+        else 0,
+    }
 
 
 def check_unwatched_emails_status() -> dict[str, int]:
@@ -463,7 +697,6 @@ def refresh_metadata_for_recent_unknowns(limit: int = 10, pool_size: int = 50) -
     if limit <= 0 or pool_size <= 0:
         return updates
 
-    threshold_dt = datetime.now() - timedelta(days=DAYS_SINCE_REQUEST)
     candidates = []
     for rec in request_db.all():
         if rec.get("title") not in (None, "", "Unknown"):
@@ -471,8 +704,6 @@ def refresh_metadata_for_recent_unknowns(limit: int = 10, pool_size: int = 50) -
         if not rec.get("ratingkey"):
             continue
         media_dt, _ = _resolve_media_added(rec)
-        if media_dt == datetime.min or media_dt > threshold_dt:
-            continue
         rec["_media_dt"] = media_dt
         candidates.append(rec)
     candidates.sort(key=lambda rec: rec["_media_dt"], reverse=True)
@@ -484,26 +715,27 @@ def refresh_metadata_for_recent_unknowns(limit: int = 10, pool_size: int = 50) -
         rating_key = rec.get("ratingkey")
         plex_username = rec.get("plexUsername")
         media_type = rec.get("mediaType")
-        if not request_id or not rating_key or not plex_username or not media_type:
+        if not request_id or not rating_key:
             continue
-        try:
-            watch_history = has_user_watched_media(plex_username, rating_key, media_type)
-        except Exception as exc:
-            logger.warning(
-                "Failed to check watch history for request %s (%s): %s",
-                request_id,
-                plex_username,
-                exc,
-            )
-            continue
-        if watch_history:
-            title = watch_history[0].get("title", rec.get("title") or "Unknown")
-            updates[request_id] = title
-            request_db.update(
-                {'title': title, 'tautulli_watch_date': datetime.now().isoformat()},
-                Request.id == request_id,
-            )
-            continue
+        if plex_username and media_type:
+            try:
+                watch_history = has_user_watched_media(plex_username, rating_key, media_type)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to check watch history for request %s (%s): %s",
+                    request_id,
+                    plex_username,
+                    exc,
+                )
+                watch_history = []
+            if watch_history:
+                title = watch_history[0].get("title", rec.get("title") or "Unknown")
+                updates[request_id] = title
+                request_db.update(
+                    {'title': title, 'tautulli_watch_date': datetime.now().isoformat()},
+                    Request.id == request_id,
+                )
+                continue
         try:
             metadata = get_tautulli_metadata(rating_key)
             title = metadata.get("title") or rec.get("title") or "Unknown"
@@ -517,7 +749,7 @@ def refresh_metadata_for_recent_unknowns(limit: int = 10, pool_size: int = 50) -
         rec.pop("_media_dt", None)
     return updates
 
-# Fetch Overseerr requests
+# Fetch Seer requests. Env var names keep OVERSEERR for backward compatibility.
 def get_overseerr_requests():
     response = requests.get(f"{OVERSEERR_URL}/request?take={OVERSEERR_NUM_OF_HISTORY_RECORDS}&filter=available&sort=added", headers={"X-Api-Key": OVERSEERR_API_KEY})
     response.raise_for_status()
@@ -525,7 +757,7 @@ def get_overseerr_requests():
 
 def _check_overseerr_connection(timeout=(5, 15)) -> bool:
     if not OVERSEERR_URL or not OVERSEERR_API_KEY:
-        logger.error("OVERSEERR CONNECTION FAILED: missing OVERSEERR_URL or OVERSEERR_API_KEY.")
+        logger.error("SEER CONNECTION FAILED: missing OVERSEERR_URL or OVERSEERR_API_KEY.")
         return False
     test_url = f"{OVERSEERR_URL}/request"
     params = {"take": 1, "filter": "available", "sort": "added"}
@@ -535,7 +767,7 @@ def _check_overseerr_connection(timeout=(5, 15)) -> bool:
         resp.raise_for_status()
         return True
     except requests.RequestException as exc:
-        logger.error("OVERSEERR CONNECTION FAILED: %s", exc)
+        logger.error("SEER CONNECTION FAILED: %s", exc)
         return False
 
 def _check_tautulli_connection(timeout=(5, 15)) -> bool:
@@ -560,11 +792,11 @@ def _check_tautulli_connection(timeout=(5, 15)) -> bool:
 
 def run_startup_checks() -> bool:
     logger.info("Running startup connectivity checks.")
-    overseerr_ok = _check_overseerr_connection()
+    seer_ok = _check_overseerr_connection()
     tautulli_ok = _check_tautulli_connection()
-    if overseerr_ok and tautulli_ok:
+    if seer_ok and tautulli_ok:
         logger.info("All external services reachable.")
-    return overseerr_ok and tautulli_ok
+    return seer_ok and tautulli_ok
 
 def get_tmdb_poster(tmdb_id, media_type):
     url = f"https://api.themoviedb.org/3/{'movie' if media_type == 'movie' else 'tv'}/{tmdb_id}"
@@ -879,7 +1111,7 @@ def _attempt_send_request(
 
 # Transform Plex URL
 def transform_plex_url(plex_url):
-    # Bail out early when Overseerr hasn't populated a Plex URL yet.
+    # Bail out early when Seer hasn't populated a Plex URL yet.
     if not plex_url:
         return None, None
 
@@ -992,7 +1224,7 @@ def send_email(to_address, subject, body, is_html=False):
 # Main logic
 def main():
     if not _check_overseerr_connection():
-        logger.info("Aborting run due to Overseerr connectivity issues.")
+        logger.info("Aborting run due to Seer connectivity issues.")
         return
     if not _check_tautulli_connection():
         logger.info("Aborting run due to Tautulli connectivity issues.")
@@ -1017,16 +1249,17 @@ def main():
         else:
             logger.info("Skipping watch status check (timestamp tracking issue)")
 
-    logger.info("Step 2: Grab requests from Overseerr")
-    # Step 1: Fetch new Overseerr requests and add them to the database if not already present
-    overseerr_requests = get_overseerr_requests()
+    logger.info("Step 2: Grab requests from Seer")
+    # Step 1: Fetch new Seer requests and add them to the database if not already present
+    seer_requests = get_overseerr_requests()
     debug_emails_sent = 0
-    # print(f"overseerr_requests:")
-    # print(overseerr_requests)
+    new_request_metadata_lookups = 0
+    # print(f"seer_requests:")
+    # print(seer_requests)
 
-    for request in overseerr_requests:
+    for request in seer_requests:
         if DEBUG_MODE:
-            logger.debug("for request in overseerr_requests: %s", request)
+            logger.debug("for request in seer_requests: %s", request)
         request_id = request['id']
         requested_by_email_raw = request['requestedBy']['email']
         requested_by_email = (requested_by_email_raw or "").strip()
@@ -1049,7 +1282,7 @@ def main():
             ratingkey = request['media']['ratingKey']
             media_type = 'movie' if request['media']['mediaType'] == 'movie' else 'tv show'
             requested_by_username = request['requestedBy']['plexUsername']
-            # Resolve Plex URLs (new Overseerr fields + backward compatibility)
+            # Resolve Plex URLs (new Seer fields + backward compatibility)
             raw_plex_url = media.get('plexUrl') or media.get('mediaUrl')
             mobile_url = media.get('iOSPlexUrl')
             
@@ -1057,6 +1290,25 @@ def main():
             mobile_url = mobile_url or fallback_mobile
             # Fetch poster URL from TMDB and add it to the database
             poster_url = get_tmdb_poster(tmdb_id, media_type)
+            title = _extract_seer_title(request, media)
+            if title == "Unknown" and new_request_metadata_lookups < TAUTULLI_NEW_REQUEST_METADATA_LIMIT:
+                try:
+                    title, used_tautulli = _resolve_title_for_new_request(request, media, ratingkey)
+                    if used_tautulli:
+                        new_request_metadata_lookups += 1
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to resolve title from Tautulli for new Seer request %s (%s): %s",
+                        request_id,
+                        ratingkey,
+                        exc,
+                    )
+            elif title == "Unknown":
+                logger.info(
+                    "Leaving new Seer request %s as Unknown; per-run Tautulli metadata limit of %s reached.",
+                    request_id,
+                    TAUTULLI_NEW_REQUEST_METADATA_LIMIT,
+                )
 
             request_db.insert({
                 'id': request_id,
@@ -1074,7 +1326,7 @@ def main():
                 'email_sent': False,
                 'skip_email': False,
                 'eligible_for_email': False,
-                'title': "Unknown"
+                'title': title
             })
 
     # Ensure email user records exist for any legacy requests

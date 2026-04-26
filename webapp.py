@@ -24,6 +24,7 @@ from forgotten_movies import (
     get_log_level,
     get_overdue_requests_for_ui,
     get_recent_sent_emails,
+    get_user_stats,
     is_scheduler_disabled,
     list_unsubscribed_emails,
     LOG_FILE_PATH,
@@ -121,9 +122,19 @@ def _format_unsubscribe_records(records):
     return formatted
 
 
+def _redirect_after_request_action(default_anchor: str):
+    if request.form.get("next") == "stats":
+        user = (request.form.get("user") or "").strip()
+        if user:
+            return redirect(url_for("stats", user=user))
+        return redirect(url_for("stats"))
+    return redirect(url_for("index", _anchor=default_anchor))
+
+
 @app.route("/", methods=["GET"])
 def index():
     todo_items = get_overdue_requests_for_ui()
+    stats_summary = get_user_stats()
     todo_messages: list[tuple[str, str]] = []
     recent_emails = get_recent_sent_emails()
     recent_messages: list[tuple[str, str]] = []
@@ -147,9 +158,22 @@ def index():
         recent_messages=recent_messages,
         unsubscribe_messages=unsubscribe_messages,
         todo_items=todo_items,
+        stats_summary=stats_summary,
         recent_emails=recent_emails,
         unsubscribe_records=unsubscribe_records,
         scheduler_disabled=is_scheduler_disabled(),
+        current_year=time.strftime("%Y"),
+    )
+
+
+@app.route("/stats", methods=["GET"])
+def stats():
+    stats_data = get_user_stats(request.args.get("user"))
+    return render_template(
+        "stats.html",
+        page_title="Overall Stats",
+        messages=get_flashed_messages(with_categories=True),
+        stats=stats_data,
         current_year=time.strftime("%Y"),
     )
 
@@ -161,15 +185,15 @@ def skip_request(request_id):
     record = request_db.get(predicate)
     if not record:
         flash("Unable to find that request.", "todo-error")
-        return redirect(url_for("index", _anchor="todo-card"))
+        return _redirect_after_request_action("todo-card")
     if record.get("skip_email"):
         flash("Reminders are already disabled for this item.", "todo-info")
-        return redirect(url_for("index", _anchor="todo-card"))
+        return _redirect_after_request_action("todo-card")
     request_db.update({"skip_email": True}, predicate)
     title = record.get("title") or "this request"
     APP_LOGGER.info("Manual action: marked request %s (%s) as do-not-send", identifier, title)
     flash(f"Won't send reminders for {title}.", "todo-success")
-    return redirect(url_for("index", _anchor="todo-card"))
+    return _redirect_after_request_action("todo-card")
 
 
 @app.route("/requests/<request_id>/send", methods=["POST"])
@@ -179,16 +203,19 @@ def send_request_now(request_id):
     record = request_db.get(predicate)
     if not record:
         flash("Unable to find that request.", "todo-error")
-        return redirect(url_for("index", _anchor="todo-card"))
+        return _redirect_after_request_action("todo-card")
 
     email_value = (record.get("email") or "").strip()
     if not email_value:
         flash("Request is missing an email address.", "todo-error")
-        return redirect(url_for("index", _anchor="todo-card"))
+        return _redirect_after_request_action("todo-card")
 
     now = datetime.now()
     user_record = get_email_user(email_value)
     APP_LOGGER.info("Manual action: send-now requested for %s (request %s)", email_value, identifier)
+    if record.get("skip_email"):
+        request_db.update({"skip_email": False}, predicate)
+        record = request_db.get(predicate) or record
     outcome = _attempt_send_request(
         record,
         {},
@@ -203,14 +230,14 @@ def send_request_now(request_id):
     if not outcome.sent:
         APP_LOGGER.info("Send-now skipped for request %s: %s", identifier, outcome.message)
         flash(outcome.message or "Reminder not sent.", "todo-info")
-        return redirect(url_for("index", _anchor="todo-card"))
+        return _redirect_after_request_action("todo-card")
 
     if DEBUG_MODE:
         flash(f"[Debug] {outcome.message} (not persisted).", "todo-info")
     else:
         flash(outcome.message, "todo-success")
     APP_LOGGER.info("Send-now completed for request %s", identifier)
-    return redirect(url_for("index", _anchor="todo-card"))
+    return _redirect_after_request_action("todo-card")
 
 @app.route("/unsubscribe", methods=["POST"])
 def unsubscribe_email():
@@ -275,6 +302,8 @@ def remove_email():
 def run_now():
     success, msg = trigger_job("manual", async_run=True)
     flash(msg, "success" if success else "info")
+    if request.form.get("next") == "settings":
+        return redirect(url_for("settings"))
     return redirect(url_for("index"))
 
 
