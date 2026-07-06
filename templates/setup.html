@@ -22,20 +22,28 @@
 
     <div class="card">
         <h2>1. Admin Account</h2>
-        <p class="help-text" style="margin-top:0;">You'll use this to sign in to the dashboard.</p>
-        <div class="config-grid">
+        <label class="toggle-switch" style="margin-bottom:0.75rem;">
+            <input type="checkbox" name="require_login" id="require_login" checked>
+            Require a login to access the dashboard
+        </label>
+        <p class="help-text" style="margin-top:0;">
+            Leave this on to protect the dashboard with the username and password below. Turn it off if this
+            app sits behind your own authentication (a reverse proxy such as Authelia/Authentik) or runs on a
+            trusted network — then the account below is optional.
+        </p>
+        <div class="config-grid" id="admin-fields">
             <div class="field">
-                <label for="admin_username">Username <span class="req-star">*</span></label>
+                <label for="admin_username">Username <span class="req-star admin-req">*</span></label>
                 <input id="admin_username" name="admin_username" type="text" autocomplete="username" required>
             </div>
             <div class="field">
-                <label for="admin_password">Password <span class="req-star">*</span></label>
+                <label for="admin_password">Password <span class="req-star admin-req">*</span></label>
                 <input id="admin_password" name="admin_password" type="password" autocomplete="new-password"
                        minlength="8" required>
                 <p class="help-text" style="margin-top:0.15rem;">At least 8 characters.</p>
             </div>
             <div class="field">
-                <label for="admin_password_confirm">Confirm password <span class="req-star">*</span></label>
+                <label for="admin_password_confirm">Confirm password <span class="req-star admin-req">*</span></label>
                 <input id="admin_password_confirm" name="admin_password_confirm" type="password"
                        autocomplete="new-password" required>
             </div>
@@ -65,4 +73,24 @@
 
 {% block extra_scripts %}
 <script src="{{ url_for('asset', filename='config_forms.js') }}"></script>
+<script>
+    (function () {
+        var toggle = document.getElementById("require_login");
+        if (!toggle) { return; }
+        var ids = ["admin_username", "admin_password", "admin_password_confirm"];
+        var stars = document.querySelectorAll(".admin-req");
+        function sync() {
+            var req = toggle.checked;
+            ids.forEach(function (id) {
+                var el = document.getElementById(id);
+                if (!el) { return; }
+                if (req) { el.setAttribute("required", "required"); }
+                else { el.removeAttribute("required"); }
+            });
+            stars.forEach(function (s) { s.style.display = req ? "" : "none"; });
+        }
+        toggle.addEventListener("change", sync);
+        sync();
+    })();
+</script>
 {% endblock %}

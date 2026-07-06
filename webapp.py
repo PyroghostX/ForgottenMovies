@@ -28,10 +28,13 @@ from config_store import (
     CONFIG_SCHEMA,
     SECTIONS,
     env_prefill,
+    has_admin,
+    is_login_required,
     is_setup_complete,
     mark_setup_complete,
     save_settings,
     set_admin,
+    set_login_required,
     validate_required,
     verify_admin,
 )
@@ -103,20 +106,28 @@ app.config.update(
 )
 
 
+def _auth_required() -> bool:
+    """Login is enforced only when the admin opted in AND an admin account
+    exists. The has_admin() guard prevents ever locking everyone out (e.g. if
+    login is toggled on before any account is created)."""
+    return is_login_required() and has_admin()
+
+
 @app.context_processor
 def inject_app_version():
-    """Expose version and setup state to every template."""
+    """Expose version and setup/auth state to every template."""
     return {
         "app_version": APP_VERSION,
         "authenticated": bool(session.get("authenticated")),
         "setup_complete": is_setup_complete(),
+        "auth_required": _auth_required(),
     }
 
 
 def login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
-        if not session.get("authenticated"):
+        if _auth_required() and not session.get("authenticated"):
             return redirect(url_for("login", next=request.path))
         return view(*args, **kwargs)
     return wrapped
@@ -134,8 +145,8 @@ def _gate_requests():
         if endpoint in SETUP_ENDPOINTS:
             return None
         return redirect(url_for("setup"))
-    # After setup, require authentication for management endpoints.
-    if not session.get("authenticated"):
+    # After setup, require authentication only if the admin opted in.
+    if _auth_required() and not session.get("authenticated"):
         if endpoint == "login":
             return None
         return redirect(url_for("login", next=request.path))
@@ -883,6 +894,9 @@ def _collect_submitted() -> dict:
 def login():
     if not is_setup_complete():
         return redirect(url_for("setup"))
+    if not _auth_required():
+        # Login is disabled (or no admin account exists) — nothing to log in to.
+        return redirect(url_for("index"))
     if session.get("authenticated"):
         return redirect(url_for("index"))
     if request.method == "POST":
@@ -922,17 +936,22 @@ def setup():
         return redirect(url_for("index") if session.get("authenticated") else url_for("login"))
 
     if request.method == "POST":
+        require_login = request.form.get("require_login") == "on"
         username = (request.form.get("admin_username") or "").strip()
         password = request.form.get("admin_password") or ""
         confirm = request.form.get("admin_password_confirm") or ""
 
         errors: list[str] = []
-        if not username or not password:
-            errors.append("Admin username and password are required.")
-        elif password != confirm:
-            errors.append("Passwords do not match.")
-        elif len(password) < 8:
-            errors.append("Password must be at least 8 characters.")
+        # An admin account is mandatory only when login is required; otherwise
+        # it is optional (but still validated if the user chose to fill it in).
+        wants_admin = require_login or username or password
+        if wants_admin:
+            if not username or not password:
+                errors.append("An admin username and password are required to enable login.")
+            elif password != confirm:
+                errors.append("Passwords do not match.")
+            elif len(password) < 8:
+                errors.append("Password must be at least 8 characters.")
 
         errors.extend(save_settings(_collect_submitted()))
         fm.load_runtime_config()
@@ -946,11 +965,17 @@ def setup():
                 flash(err, "error")
             return redirect(url_for("setup"))
 
-        set_admin(username, password)
+        if username and password:
+            set_admin(username, password)
+        set_login_required(require_login)
         mark_setup_complete(True)
         fm.load_runtime_config()
         session["authenticated"] = True
-        APP_LOGGER.info("First-time setup completed; admin account '%s' created.", username)
+        APP_LOGGER.info(
+            "First-time setup completed (login %s; admin account %s).",
+            "required" if require_login else "disabled",
+            "created" if (username and password) else "not set",
+        )
         flash("Setup complete. Welcome to Forgotten Movies!", "success")
         return redirect(url_for("index"))
 
@@ -1001,6 +1026,9 @@ def settings():
         scheduler_disabled=is_scheduler_disabled(),
         job_status=get_job_status(),
         using_custom_template=is_using_custom_email_template(),
+        login_required_setting=is_login_required(),
+        has_admin_account=has_admin(),
+        admin_username=config_store.get_admin_username() or "",
         messages=get_flashed_messages(with_categories=True),
         current_year=time.strftime("%Y"),
     )
@@ -1015,6 +1043,44 @@ def save_config():
             flash(err, "error")
     else:
         flash("Settings saved.", "success")
+    return redirect(url_for("settings"))
+
+
+@app.route("/settings/account", methods=["POST"])
+def update_account():
+    """Update the require-login toggle and optionally the admin credentials."""
+    require_login = request.form.get("require_login") == "on"
+    username = (request.form.get("admin_username") or "").strip()
+    password = request.form.get("admin_password") or ""
+    confirm = request.form.get("admin_password_confirm") or ""
+
+    errors: list[str] = []
+    # Only treat this as a credential change when a new password was entered
+    # (the username field is pre-filled, so it alone shouldn't count).
+    changing_password = bool(password or confirm)
+    if changing_password:
+        if not username:
+            errors.append("A username is required to set the admin password.")
+        elif password != confirm:
+            errors.append("Passwords do not match.")
+        elif len(password) < 8:
+            errors.append("Password must be at least 8 characters.")
+
+    # Prevent locking everyone out: can't require login without an admin account.
+    if require_login and not has_admin() and not changing_password:
+        errors.append("Set an admin username and password before requiring login.")
+
+    if errors:
+        for err in errors:
+            flash(err, "error")
+        return redirect(url_for("settings"))
+
+    if changing_password:
+        set_admin(username, password)
+    set_login_required(require_login)
+    fm.load_runtime_config()
+    APP_LOGGER.info("Account settings updated (login %s).", "required" if require_login else "disabled")
+    flash("Account settings updated.", "success")
     return redirect(url_for("settings"))
 
 

@@ -418,11 +418,11 @@
             <a href="{{ url_for('index') }}" class="brand-link">Forgotten Movies</a>
         </div>
         <nav class="site-nav">
-            {% if authenticated and setup_complete %}
+            {% if setup_complete and (authenticated or not auth_required) %}
             <a href="{{ url_for('index') }}">Dashboard</a>
             <a href="{{ url_for('stats') }}">Stats</a>
             <a href="{{ url_for('settings') }}">Settings</a>
-            <a href="{{ url_for('logout') }}">Logout</a>
+            {% if authenticated %}<a href="{{ url_for('logout') }}">Logout</a>{% endif %}
             {% endif %}
         </nav>
     </header>

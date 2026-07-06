@@ -51,6 +51,7 @@ _ADMIN_USERNAME_KEY = "__admin_username"
 _ADMIN_PASSWORD_HASH_KEY = "__admin_password_hash"
 _FLASK_SECRET_KEY = "__flask_secret_key"
 _UNSUBSCRIBE_SECRET_KEY = "__unsubscribe_secret_key"
+_REQUIRE_LOGIN_KEY = "__require_login"
 
 # In-process read cache, refreshed when the backing file's mtime changes.
 _CACHE_LOCK = threading.RLock()
@@ -354,6 +355,16 @@ def verify_admin(username: str, password: str) -> bool:
     if (username or "").strip() != stored_user:
         return False
     return check_password_hash(stored_hash, password or "")
+
+
+def is_login_required() -> bool:
+    """Whether the dashboard requires a login. Defaults to True (secure)."""
+    value = _raw(_REQUIRE_LOGIN_KEY)
+    return True if value is None else bool(value)
+
+
+def set_login_required(value: bool) -> None:
+    _write_many({_REQUIRE_LOGIN_KEY: bool(value)})
 
 
 # ---------------------------------------------------------------------------

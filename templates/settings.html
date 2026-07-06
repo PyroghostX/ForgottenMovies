@@ -46,6 +46,37 @@
 </form>
 
 <div class="card">
+    <h2>Account &amp; Security</h2>
+    <form method="post" action="{{ url_for('update_account') }}">
+        <label class="toggle-switch">
+            <input type="checkbox" name="require_login" {% if login_required_setting %}checked{% endif %}>
+            Require a login to access the dashboard
+        </label>
+        <p class="help-text">
+            Turn this off if the app sits behind your own authentication (a reverse proxy such as
+            Authelia/Authentik) or runs on a trusted network.
+            {% if not has_admin_account %}<strong>No admin account exists yet — set one below before enabling this.</strong>{% endif %}
+        </p>
+        <div class="config-grid" style="margin-top:1rem;">
+            <div class="field">
+                <label for="acct_username">Admin username</label>
+                <input id="acct_username" name="admin_username" type="text" autocomplete="username" value="{{ admin_username }}">
+            </div>
+            <div class="field">
+                <label for="acct_password">New password</label>
+                <input id="acct_password" name="admin_password" type="password" autocomplete="new-password" minlength="8">
+            </div>
+            <div class="field">
+                <label for="acct_password_confirm">Confirm new password</label>
+                <input id="acct_password_confirm" name="admin_password_confirm" type="password" autocomplete="new-password">
+            </div>
+        </div>
+        <p class="help-text" style="margin-top:0;">Leave the password fields blank to keep the current credentials.</p>
+        <button type="submit">Save Account Settings</button>
+    </form>
+</div>
+
+<div class="card">
     <h2>Email Template</h2>
     <p>Customize the reminder email that recipients receive.</p>
     <p class="help-text">
