@@ -3,15 +3,6 @@ services:
     image: pyroghostx/forgottenmovies:latest
     container_name: forgotten-movies
     restart: unless-stopped
-    # ---------------------------------------------------------------------
-    # Forgotten Movies is now configured entirely in the web UI.
-    # On first launch, open http://<host>:8741 and a setup wizard walks you
-    # through creating an admin login and connecting Seerr, Tautulli, SMTP,
-    # etc. Nothing app-related needs to live in this file anymore.
-    #
-    # Only deployment/infrastructure settings remain as environment variables.
-    # All of them are optional.
-    # ---------------------------------------------------------------------
     environment:
       - PUID=${PUID}          # host user id (defined in .env)
       - PGID=${PGID}          # host group id (defined in .env)
