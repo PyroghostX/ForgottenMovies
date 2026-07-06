@@ -1,5 +1,23 @@
 {% extends "base.html" %}
 
+{% block extra_head %}
+<style>
+    .font-size-controls { display: flex; align-items: center; gap: 0.4rem; }
+    .font-size-controls .fs-label { color: #c5cae9; font-weight: 600; }
+    .font-size-controls button {
+        padding: 0.35rem 0.7rem;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-weight: 700;
+        background-color: #3f51b5;
+        color: #fff;
+        line-height: 1;
+    }
+    .font-size-controls button:hover { background-color: #5c6bc0; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="level-actions">
     <form class="level-form" method="post" action="{{ url_for('update_log_level') }}">
@@ -18,6 +36,12 @@
                 <input type="checkbox" id="auto-refresh-toggle" checked>
                 Auto-refresh
             </label>
+            <div class="font-size-controls" role="group" aria-label="Log text size">
+                <span class="fs-label">Text size:</span>
+                <button type="button" id="log-font-smaller" aria-label="Decrease log text size">A&minus;</button>
+                <button type="button" id="log-font-larger" aria-label="Increase log text size">A+</button>
+                <button type="button" id="log-font-reset">Reset</button>
+            </div>
         </div>
 <pre id="log-content">{{ log_text }}</pre>
 {% endblock %}
@@ -28,6 +52,32 @@
         const logContent = document.getElementById("log-content");
         const toggle = document.getElementById("auto-refresh-toggle");
         if (!logContent) { return; }
+
+        // Log text size (A- / A+ / Reset), remembered across reloads.
+        const FONT_KEY = "fm-log-font-size";
+        const FONT_MIN = 9, FONT_MAX = 28, FONT_DEFAULT = 13;
+        let fontSize = FONT_DEFAULT;
+        try {
+            const stored = parseInt(localStorage.getItem(FONT_KEY), 10);
+            if (!isNaN(stored)) { fontSize = stored; }
+        } catch (e) {}
+        const applyFontSize = () => {
+            fontSize = Math.min(FONT_MAX, Math.max(FONT_MIN, fontSize));
+            logContent.style.fontSize = fontSize + "px";
+            try { localStorage.setItem(FONT_KEY, String(fontSize)); } catch (e) {}
+        };
+        const bindFont = (id, delta) => {
+            const btn = document.getElementById(id);
+            if (!btn) { return; }
+            btn.addEventListener("click", () => {
+                fontSize = (delta === null) ? FONT_DEFAULT : fontSize + delta;
+                applyFontSize();
+            });
+        };
+        applyFontSize();
+        bindFont("log-font-smaller", -1);
+        bindFont("log-font-larger", 1);
+        bindFont("log-font-reset", null);
 
         const fetchLogs = () => {
             if (toggle && !toggle.checked) { return; }

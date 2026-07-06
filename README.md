@@ -56,156 +56,94 @@ Everything is stored inside the app's data directory. You can change any of it l
 
 > **Upgrading from an earlier version?** Your existing `docker-compose` values are read once to pre-fill the wizard, so just review them and click through. After setup completes, the in-app configuration is authoritative and those environment variables are ignored — you can delete the app settings from your compose file (see `docker-compose.yml-example`).
 
-# Configuration Reference
+# Configuration
 
-Every setting below is configured in the web UI (**Settings** page); this table is just a reference for what each one does. The only values that remain environment variables are the deployment/infrastructure settings near the bottom (`FLASK_SECRET_KEY`, `TRUSTED_PROXIES`, `REAL_IP_HEADER`, `REDIS_URL`, `LOG_*`, `DATA_DIR`, `GUNICORN_*`, and the Docker `PUID`/`PGID`/`TZ`/`ROOT`).
+**All application settings are managed in the web UI** — on the first-run wizard and afterward on the **Settings** page. There is nothing to configure in `docker-compose` anymore. Saved changes apply on the next scan; no restart is needed.
+
+| Settings section | What it covers |
+|------------------|----------------|
+| **Connections** | Seerr URL + API key, Tautulli URL + API key, and an optional TheMovieDB API key for poster art. Each has a **Test** button. |
+| **Email** | SMTP server / port / encryption, username & password, From name & address, BCC, admin name, and your request-portal URL. Includes a **Send Test Email** button. |
+| **Reminder Rules** | How old a request must be before a reminder, per-recipient cooldown, how many Seerr records to scan per run, Tautulli metadata-lookup limits, the scan interval, and the startup delay. |
+| **Self-Service** | Public base URL — set it to turn on one-click unsubscribe links (the signing secret is generated automatically). |
+| **Debug** | Debug mode, debug address, and per-run send cap for safe testing. |
+
+The **scheduler on/off** toggle and the **email template editor** also live on the Settings page.
+
+## Environment variables (optional)
+
+Only deployment/infrastructure settings remain as environment variables, and all of them are optional.
 
 | Key | Description |
 |-----|-------------|
-| `TAUTULLI_API_KEY`, `TAUTULLI_URL` | Tautulli credentials for watch history queries; the URL must include the v2 API endpoint (e.g. `https://tautulli.example.com/api/v2`). |
-| `OVERSEERR_API_KEY`, `OVERSEERR_URL` | Seerr API details used to pull fulfilled requests; point the URL at the `/api/v1` root (e.g. `https://request.example.com/api/v1`). The variable names stay `OVERSEERR_*` for backward compatibility. |
-| `THEMOVIEDB_API_KEY` | Fetches poster artwork for reminder emails. Leave unset to skip artwork (emails still send). |
-| `SMTP_SERVER`, `SMTP_PORT` | SMTP host/port for STARTTLS email delivery (port defaults to 587). |
-| `SMTP_ENCRYPTION` | One of `STARTTLS` (default), `SSL`, or `NONE`. If unset and `SMTP_PORT=465`, the app automatically picks `SSL`. |
-| `SMTP_USERNAME` | Optional SMTP auth username when it differs from `FROM_EMAIL_ADDRESS`. |
-| `FROM_EMAIL_ADDRESS`, `FROM_NAME`, `EMAIL_PASSWORD` | Outbound email identity and password. |
-| `BCC_EMAIL_ADDRESS` | Optional address copied on reminders (you may also set it equal to `FROM_EMAIL_ADDRESS`). |
-| `ADMIN_NAME` | Shown in reminder copy so recipients know who to contact. |
-| `OVERSEERR_NUM_OF_HISTORY_RECORDS` | Number of Seerr entries fetched per scan (default 10). |
-| `TAUTULLI_NEW_REQUEST_METADATA_LIMIT` | Maximum new Seerr requests per run that can ask Tautulli for title metadata when Seerr did not provide a title (default 50). |
-| `TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT` | Maximum existing unknown-title requests per run that can ask Tautulli for title metadata/watch history (default 30). |
-| `DAYS_SINCE_REQUEST`, `DAYS_SINCE_REQUEST_EMAIL_TEXT` | Minimum days since request fulfillment before a reminder is sent (default 90) and the human-readable text used in the email template (default `"3 months"`). |
-| `HOURS_BETWEEN_EMAILS` | Cooldown window per recipient (default 24 hours). |
-| `REQUEST_URL` | Link back to your request portal (used in the email footer). |
-| `JOB_INTERVAL_SECONDS` | Scheduler frequency (default 600 seconds). |
-| `INITIAL_DELAY_SECONDS` | Startup delay before the first scheduled run (default 600 seconds). |
-| `DISABLE_SCHEDULER` | Start with the scheduler disabled until re-enabled in the UI (default `false`). |
-| `LOG_LEVEL` | One of `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` (default `INFO`). |
-| `LOG_FILE_MAX_BYTES`, `LOG_FILE_BACKUP_COUNT` | Rotating file handler settings (defaults: 1 MB, 3 backups). |
-| `DEBUG_MODE` | When `true`, reroutes mail to `DEBUG_EMAIL`/`FROM_EMAIL_ADDRESS` and enforces `DEBUG_MAX_EMAILS` per run. |
-| `DEBUG_EMAIL`, `DEBUG_MAX_EMAILS` | Override receiving address and cap while in debug mode (default max = 2). |
-| `FLASK_SECRET_KEY` | **Env-only, optional.** Session/flash signing key for the Flask UI. If unset, a random key is generated and persisted to the data directory automatically. |
-| `EMAIL_TEMPLATE_PATH` | **Env-only, optional.** Override path for the custom HTML template (defaults to `/app/data/email_template.html`, which the in-app Email Template editor writes to). |
-| `BASE_URL` | **Configured in the UI** (Self-Service). Public URL where your instance is reachable (e.g. `https://forgotten.example.com`). Setting it enables one-click self-service unsubscribe links; the signing secret is generated and persisted automatically. |
-| `TRUSTED_PROXIES` | Comma-separated IPs or CIDRs of trusted reverse proxies (e.g. `172.16.0.0/12,10.0.0.1`). Required to trust `REAL_IP_HEADER`. |
-| `REAL_IP_HEADER` | Header containing client IP set by your reverse proxy (default: `X-Forwarded-For`). Only trusted when request comes from `TRUSTED_PROXIES`. Used for subscription management logging. |
-| `REDIS_URL` | Optional Redis URL for rate limiting storage (e.g. `redis://localhost:6379/0`). Defaults to in-memory storage, which doesn't persist across restarts or scale across instances. |
-| `JOB_LOCK_TIMEOUT` | Seconds to wait when acquiring the inter-process job lock (default `0.1`). |
-| `ROOT`, `PUID`, `PGID`, `TZ` | Docker-only: bind mount root, container UID/GID, timezone. The container starts as root only to remap the runtime user to `PUID`/`PGID` and fix data-dir ownership, then drops to that non-root user (default `1000:1000`) for the app itself. |
+| `FLASK_SECRET_KEY` | Session signing key. If unset, one is generated and persisted to the data directory automatically. |
+| `DATA_DIR` | Where config, data, logs, and the email template live (default `/app/data`). |
+| `TRUSTED_PROXIES` | Comma-separated IPs/CIDRs of trusted reverse proxies (e.g. `172.16.0.0/12,10.0.0.1`). Required to trust `REAL_IP_HEADER`. |
+| `REAL_IP_HEADER` | Header carrying the real client IP from your proxy (default `X-Forwarded-For`). Only trusted from `TRUSTED_PROXIES`. |
+| `REDIS_URL` | Optional Redis URL for rate-limit storage (e.g. `redis://localhost:6379/0`). Defaults to in-memory. |
+| `LOG_LEVEL` | `DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL` (default `INFO`; also changeable in the UI). |
+| `LOG_FILE_MAX_BYTES`, `LOG_FILE_BACKUP_COUNT` | Rotating log-handler settings (defaults: 1 MB, 3 backups). |
+| `EMAIL_TEMPLATE_PATH` | Override path for the custom template (default `/app/data/email_template.html`, which the in-app editor writes to). |
+| `JOB_LOCK_TIMEOUT` | Seconds to wait for the inter-process job lock (default `0.1`). |
+| `GUNICORN_WORKERS`, `GUNICORN_TIMEOUT`, `GUNICORN_BIND` | Web server tuning (defaults: `2`, `120`, `0.0.0.0:8741`). |
+| `ROOT`, `PUID`, `PGID`, `TZ` | Docker: bind-mount root, runtime UID/GID, timezone. The container starts as root only to remap the runtime user to `PUID`/`PGID` and fix data-dir ownership, then drops to that non-root user (default `1000:1000`). |
 
-> **Tip:** When credentials contain characters such as `!`, `$`, `&`, or `#`, wrap the value in quotes (or store them inside an `.env` file) so your shell/YAML parser doesn't truncate or reinterpret the password.
-> **Important:** The email template is mandatory. If neither `/app/data/email_template.html` nor `/app/data/email_template_original.html` can be read or formatted with the supplied placeholders, the job raises an error and no reminders are sent. This prevents accidents with blank messages.
+# Installation
 
-# INSTALLATION
+There are no API keys or SMTP credentials to put in your compose file or run command — you provide those in the browser during first-run setup. Only the standard Docker settings (data volume, port, PUID/PGID/TZ) go here.
 
-## Docker Compose Deployment
+## Docker Compose (recommended)
 
 ➡️ [`docker-compose.yml-example`](./docker-compose.yml-example)
 ```bash
-Copy the contents of docker-compose.yml-example into your docker-compose.yml
-# edit docker-compose.yml and .env with your API keys, SMTP credentials, and secrets
-Make sure to update all the variables or this won't run correctly of course.
+# 1. Copy docker-compose.yml-example to docker-compose.yml and set your data path.
+# 2. Start it:
 docker-compose up -d
+# 3. Open the UI and complete the setup wizard:
 open http://localhost:8741
 ```
 
-## Docker run Deployment
+## Docker run
 ```bash
 docker run -d \
   --name forgotten-movies \
   --restart unless-stopped \
-  -e PUID=${PUID} \
-  -e PGID=${PGID} \
-  -e TZ=${TZ} \
-  -e TAUTULLI_URL="https://subdomain.example.com/api/v2" \
-  -e TAUTULLI_API_KEY="YOUR_KEY" \
-  -e OVERSEERR_URL="https://request.example.com/api/v1" \
-  -e OVERSEERR_API_KEY="YOUR_KEY" \
-  -e OVERSEERR_NUM_OF_HISTORY_RECORDS=200 \
-  -e REQUEST_URL="https://request.example.com" \
-  -e THEMOVIEDB_API_KEY="YOUR_KEY" \
-  -e SMTP_SERVER="smtp.gmail.com" \
-  -e SMTP_PORT=587 \
-  -e SMTP_ENCRYPTION="STARTTLS" \
-  -e SMTP_USERNAME="smtp-login@example.com" \
-  -e FROM_NAME="Plex Forgotten Movies" \
-  -e FROM_EMAIL_ADDRESS="email@gmail.com" \
-  -e EMAIL_PASSWORD="password" \
-  -e BCC_EMAIL_ADDRESS="email@gmail.com" \
-  -e ADMIN_NAME="admin_name" \
-  -e DAYS_SINCE_REQUEST=90 \
-  -e DAYS_SINCE_REQUEST_EMAIL_TEXT="3 months" \
-  -e HOURS_BETWEEN_EMAILS=168 \
-  -e JOB_INTERVAL_SECONDS=3600 \
-  -e INITIAL_DELAY_SECONDS=300 \
-  -e FLASK_SECRET_KEY="YOUR_KEY" \
-  -e LOG_LEVEL="INFO" \
-  -e DEBUG_MODE="false" \
-  -e DEBUG_MAX_EMAILS=2 \
-  -e DEBUG_EMAIL="email@gmail.com" \
-  -e DISABLE_SCHEDULER="false" \
+  -e PUID=1000 \
+  -e PGID=1000 \
+  -e TZ=America/Denver \
   -p 8741:8741 \
   -v <your_data_path>:/app/data \
   pyroghostx/forgottenmovies:latest
+# Then open http://localhost:8741 and finish setup in the browser.
 ```
 
-## Unraid docker run delpoyment
+## Unraid docker run
 ```bash
-docker run
-  -d
-  --name='forgotten-movies'
-  --net='unraid'
-  --pids-limit 2048
-  -e TZ="Europe/Berlin"
-  -e HOST_OS="Unraid"
-  -e HOST_HOSTNAME="UNRAID-Server"
-  -e HOST_CONTAINERNAME="forgotten-movies"
-  -e 'PUID'='99'
-  -e 'PGID'='100'
-  -e 'TZ'='Europe/Berlin'
-  -e 'TAUTULLI_URL'='http://192.168.178.29:8181/api/v2'
-  -e 'TAUTULLI_API_KEY'='68xxxxxxxxxxxxxxxxx73'
-  -e 'OVERSEERR_URL'='http://192.168.178.29:5055/api/v1'
-  -e 'OVERSEERR_API_KEY'='MZZxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxNZz='
-  -e 'OVERSEERR_NUM_OF_HISTORY_RECORDS'='200'
-  -e 'REQUEST_URL'='https://xyz.xyz.de'
-  -e 'THEMOVIEDB_API_KEY'='1xxxxxxxxxxxxxxxxxxxxxxxxxxxx5'
-  -e 'SMTP_SERVER'='xxxxxxxxx'
-  -e 'SMTP_PORT'='587'
-  -e 'SMTP_ENCRYPTION'='STARTTLS'
-  -e 'SMTP_USERNAME'='smtp-login@xyz.de'
-  -e 'FROM_NAME'='Plex'
-  -e 'FROM_EMAIL_ADDRESS'='ab@xyz.de'
-  -e 'EMAIL_PASSWORD'='xxxxxxxxxxxxxxxxxx'
-  -e 'BCC_EMAIL_ADDRESS'='email@gmail.com'
-  -e 'ADMIN_NAME'='Admin'
-  -e 'DAYS_SINCE_REQUEST'='90'
-  -e 'DAYS_SINCE_REQUEST_EMAIL_TEXT'='3 Months'
-  -e 'HOURS_BETWEEN_EMAILS'='48'
-  -e 'JOB_INTERVAL_SECONDS'='3600'
-  -e 'INITIAL_DELAY_SECONDS'='600'
-  -e 'FLASK_SECRET_KEY'='119cxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx772'
-  -e 'LOG_LEVEL'='INFO'
-  -e 'DEBUG_MODE'='false'
-  -e 'DEBUG_MAX_EMAILS'='2'
-  -e 'DEBUG_EMAIL'='xyz@xyz.com'
-  -e 'DISABLE_SCHEDULER'='true'
-  -e 'restart'='unless-stopped'
-  -l net.unraid.docker.managed=dockerman
-  -l net.unraid.docker.webui='http://[IP]:[PORT:8741]'
-  -l net.unraid.docker.icon='https://raw.githubusercontent.com/PyroghostX/ForgottenMovies/refs/heads/main/files/logo.png'
-  -p '8741:8741/tcp'
-  -v '/mnt/cache/appdata/mediaserver/forgotten-movies':'/app/data':'rw'
+docker run \
+  -d \
+  --name='forgotten-movies' \
+  --net='unraid' \
+  --pids-limit 2048 \
+  -e 'PUID'='99' \
+  -e 'PGID'='100' \
+  -e 'TZ'='Europe/Berlin' \
+  -l net.unraid.docker.managed=dockerman \
+  -l net.unraid.docker.webui='http://[IP]:[PORT:8741]' \
+  -l net.unraid.docker.icon='https://raw.githubusercontent.com/PyroghostX/ForgottenMovies/refs/heads/main/files/logo.png' \
+  -p '8741:8741/tcp' \
+  -v '/mnt/cache/appdata/mediaserver/forgotten-movies':'/app/data':'rw' \
   --restart=unless-stopped 'pyroghostx/forgottenmovies:latest'
-  ```
+# Then open the WebUI and finish setup in the browser.
+```
 
 
 # Customising the Email Template
 
-1. In your /app/data folder Copy the "email_template_original.html" and name it "email_template.html"
-2. The job automatically reloads the template when the file changes—no restart required.
-3. If the template is missing, empty, or Jinja raises an error, the job exits with a clear message so you can fix the template.
-4. Update the docker variables `DAYS_SINCE_REQUEST_EMAIL_TEXT` if you change `DAYS_SINCE_REQUEST` so the copy matches the actual delay.
+The easiest way is the built-in editor at **Settings → Email Template**: it has a live preview, a clickable variable reference, a test-send button, and one-click reset to the default.
+
+Prefer editing files directly? Copy `/app/data/email_template_original.html` to `/app/data/email_template.html` and edit that copy — the app reloads it automatically when it changes, no restart required. If you change the **Days before reminding** setting, update the **Days-since text** setting so the copy matches the actual delay.
+
+> **Important:** A valid template is mandatory. If neither `/app/data/email_template.html` nor `/app/data/email_template_original.html` can be read or rendered with the placeholders below, the job raises an error and no reminders are sent — this prevents blank emails.
 
 Helpful context variables available inside the template:
 
@@ -219,7 +157,7 @@ Helpful context variables available inside the template:
 | `mobile_url` | Optional Plex mobile deep link. |
 | `poster_url` | Poster artwork URL (if available). |
 | `request_url` | Link back to your request portal (may be empty). |
-| `admin_name` | Value of `ADMIN_NAME`. |
+| `admin_name` | The admin name configured under Settings → Email. |
 | `unsubscribe_url` | encrypted unsubscribe link (empty when feature disabled). |
 
 For example: The {{ media_type }} <strong>{{ title }}</strong> that you requested was added about {{ time_since_text }} ago but you haven't watched it yet.
@@ -233,20 +171,10 @@ When enabled, reminder emails include an unsubscribe link that lets users manage
 
 ## Enabling the Feature
 
-1. **Generate a secret key:**
-   ```bash
-   python -c "import secrets; print(secrets.token_hex(32))"
-   ```
+1. Open **Settings → Self-Service** and set **Public base URL** to your instance's public HTTPS URL (e.g. `https://forgotten.example.com`).
+2. Save. That's it — the token-signing secret is generated and stored automatically, and reminder emails immediately begin including an unsubscribe link in the footer and headers. No restart needed.
 
-2. **Set both environment variables:**
-   ```yaml
-   UNSUBSCRIBE_SECRET_KEY: "your-64-character-hex-key"
-   BASE_URL: "https://forgotten.example.com"
-   ```
-
-3. **Restart the container.** When enabled, reminder emails will include an unsubscribe link in the footer and email headers.
-
-When disabled (default), emails send without unsubscribe links and the endpoints return 404.
+When no base URL is set (default), emails send without unsubscribe links and the endpoints return 404.
 
 ## Email Headers & Deliverability
 
@@ -377,7 +305,8 @@ server {
 
 - **Dashboard (`/`)** - Run the job manually, review the upcoming reminder queue (oldest requests first), see the most recent reminder emails, and manage the unsubscribe list.
 - **Logs (`/logs`)** - Live tail of the application log with controls to change the log level, clear the log files, and toggle auto-refresh.
-- **Settings (`/settings`)** - Enable or disable the background scheduler that performs automated API calls and sends reminder emails.
+- **Settings (`/settings`)** - Configure connections, email, reminder rules, and debug options; toggle the background scheduler; run manual actions; and open the email template editor. All changes apply live.
+- **Setup (`/setup`)** - Shown only on first launch, before any configuration exists: creates your admin login and collects the initial settings. After setup, the dashboard requires signing in.
 
 
 # Support
@@ -387,8 +316,8 @@ server {
 
 # Debugging & Operations
 
-- Set `DEBUG_MODE=true` to reroute mail to `DEBUG_EMAIL` (or `FROM_EMAIL_ADDRESS` if `DEBUG_EMAIL` is blank) and cap sends via `DEBUG_MAX_EMAILS`.
-- Logs rotate when they reach `LOG_FILE_MAX_BYTES`. Adjust or disable rotation via environment variables if needed.
+- Turn on **Debug mode** under **Settings → Debug** to reroute mail to the debug address (or the From address if blank) and cap sends per run — handy for testing without emailing real users.
+- Logs rotate when they reach `LOG_FILE_MAX_BYTES`. Adjust rotation via environment variables if needed.
 
 ## Reading the logs
 
@@ -401,21 +330,22 @@ server {
 
 | Component | Purpose |
 |-----------|---------|
-| `forgotten_movies.py` | Core job. Loads Seerr requests, checks Tautulli watch history, builds emails from the template, tracks state in TinyDB. |
-| `webapp.py` | Flask UI for manual runs, queue visibility, logs, and settings. Manual runs now defer to an inter-process lock so they play nicely with the scheduler. |
-| `scheduler_runner.py` | Standalone process that wakes up every `JOB_INTERVAL_SECONDS`, respects the TinyDB disable flag, and triggers the core job if the lock is free. |
+| `config_store.py` | Single source of truth for all application settings, plus the admin credentials and setup state. Persisted in `/app/data/app_config.json` and edited via the setup wizard and Settings page; file-locked writes and an mtime cache keep the web workers and scheduler in sync. |
+| `forgotten_movies.py` | Core job. Reloads config from `config_store` at each run, loads Seerr requests, checks Tautulli watch history, builds emails from the template, tracks state in TinyDB. TinyDB writes are serialized with a cross-process lock. |
+| `webapp.py` | Flask UI for the setup wizard, login, manual runs, queue visibility, logs, and settings. A `before_request` gate enforces onboarding then authentication; manual runs defer to an inter-process lock so they play nicely with the scheduler. |
+| `scheduler_runner.py` | Standalone process that waits until setup is complete, wakes on the configured scan interval, respects the disable flag, and triggers the core job if the lock is free. |
 | `job_runner.py` | Shared helpers that wrap the core job with logging, lock acquisition, and log flushing. |
-| `entrypoint.py` | Lightweight supervisor that starts both the scheduler process and Gunicorn, forwarding signals so the container restarts cleanly. |
-| TinyDB (`/app/data/*.json`) | Stores Seerr request metadata, email history, and unsubscribe list. |
+| `entrypoint.py` | Supervisor that starts the scheduler process and Gunicorn, forwarding signals so the container restarts cleanly. |
+| `docker-entrypoint.sh` | Remaps the runtime user to `PUID`/`PGID`, fixes data-dir ownership, and drops from root before launching. |
+| TinyDB (`/app/data/*.json`) | Stores app config, Seerr request metadata, email history, and unsubscribe list. |
 | `templates/email_template.html` | HTML reminder template. Copied to `/app/data/email_template_original.html` on start; `/app/data/email_template.html` overrides if present. |
-| `templates/base.html` et al. | Shared layout, dashboard, and log templates for the web UI. |
-| `docker-compose.yml` | Opinionated container configuration: single service running the supervisor entrypoint with a bind-mounted data directory. |
+| `templates/base.html` et al. | Shared layout plus dashboard, setup, login, settings, and email-editor templates for the web UI. |
 
 Everything that changes at runtime lives under `/app/data` so you can back it up or mount it from the host.
 
 ## Contributing
 
-Issues and pull requests are welcome. If you add new template placeholders or environment variables, please document them in this README so operators can configure them correctly.
+Issues and pull requests are welcome. If you add a new template placeholder, document it in this README. If you add a new setting, add it to `CONFIG_SCHEMA` in `config_store.py` so it appears in the setup wizard and Settings page automatically.
 
 ## License
 
