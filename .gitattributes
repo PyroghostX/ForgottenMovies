@@ -1,0 +1,4 @@
+# Shell scripts must keep LF endings or they fail with "bad interpreter" in the
+# Linux container, even when the repo is checked out on Windows.
+*.sh text eol=lf
+docker-entrypoint.sh text eol=lf

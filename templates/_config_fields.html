@@ -1,0 +1,48 @@
+{% macro render_field(field) %}
+<div class="field">
+  {% if field.type == 'bool' %}
+    <label class="toggle-switch">
+      <input type="checkbox" name="{{ field.key }}" {% if field.checked %}checked{% endif %}>
+      {{ field.label }}
+    </label>
+  {% else %}
+    <label for="f_{{ field.key }}">{{ field.label }}{% if field.required %} <span class="req-star">*</span>{% endif %}</label>
+    {% if field.type == 'enum' %}
+      <select id="f_{{ field.key }}" name="{{ field.key }}">
+        {% for choice in field.choices %}
+          <option value="{{ choice }}" {% if field.value == choice %}selected{% endif %}>{{ choice }}</option>
+        {% endfor %}
+      </select>
+    {% elif field.type == 'int' %}
+      <input id="f_{{ field.key }}" name="{{ field.key }}" type="number" value="{{ field.value }}"
+             {% if field.required %}required{% endif %}>
+    {% elif field.type == 'secret' %}
+      <input id="f_{{ field.key }}" name="{{ field.key }}" type="password" autocomplete="new-password"
+             placeholder="{% if field.is_set %}•••••••• (leave blank to keep){% endif %}"
+             {% if field.required and not field.is_set %}required{% endif %}>
+    {% else %}
+      <input id="f_{{ field.key }}" name="{{ field.key }}"
+             type="{{ 'email' if field.type == 'email' else ('url' if field.type == 'url' else 'text') }}"
+             value="{{ field.value }}" {% if field.required %}required{% endif %}>
+    {% endif %}
+  {% endif %}
+  {% if field.help %}<p class="help-text" style="margin-top:0.15rem;">{{ field.help }}</p>{% endif %}
+</div>
+{% endmacro %}
+
+{% macro section_tests(section_name) %}
+  {% if section_name == 'Connections' %}
+    <div class="test-row">
+      <button type="button" class="secondary-btn test-connection-btn" data-service="seerr">Test Seerr</button>
+      <button type="button" class="secondary-btn test-connection-btn" data-service="tautulli">Test Tautulli</button>
+      <span class="test-result" data-for="connection"></span>
+    </div>
+  {% elif section_name == 'Email' %}
+    <div class="test-row">
+      <input type="email" class="test-email-input" placeholder="Send test to… (blank = From address)"
+             style="max-width: 320px; margin-bottom: 0;">
+      <button type="button" class="secondary-btn test-email-btn">Send Test Email</button>
+      <span class="test-result" data-for="email"></span>
+    </div>
+  {% endif %}
+{% endmacro %}

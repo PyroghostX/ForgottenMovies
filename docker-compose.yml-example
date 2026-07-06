@@ -3,40 +3,31 @@ services:
     image: pyroghostx/forgottenmovies:latest
     container_name: forgotten-movies
     restart: unless-stopped
+    # ---------------------------------------------------------------------
+    # Forgotten Movies is now configured entirely in the web UI.
+    # On first launch, open http://<host>:8741 and a setup wizard walks you
+    # through creating an admin login and connecting Seerr, Tautulli, SMTP,
+    # etc. Nothing app-related needs to live in this file anymore.
+    #
+    # Only deployment/infrastructure settings remain as environment variables.
+    # All of them are optional.
+    # ---------------------------------------------------------------------
     environment:
-      - PUID=${PUID} # default user id, defined in .env
-      - PGID=${PGID} # default group id, defined in .env
-      - TZ=${TZ} # timezone, defined in .env
-      - TAUTULLI_URL=https://subdomain.example.com/api/v2 # such as https://tautulli.example.com/api/v2 or your local ip/port
-      - TAUTULLI_API_KEY=YOUR_KEY
-      - OVERSEERR_URL=https://request.example.com/api/v1
-      - OVERSEERR_API_KEY=YOUR_KEY
-      - OVERSEERR_NUM_OF_HISTORY_RECORDS=200 #Set this to how many requests to pull from Seerr, base it on how many youve gotten in the last 3-4 months.
-      - TAUTULLI_NEW_REQUEST_METADATA_LIMIT=50 #Max new requests per run that can ask Tautulli for missing title metadata.
-      - TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT=30 #Max existing unknown-title requests per run that can ask Tautulli for metadata/watch history.
-      - REQUEST_URL=https://request.example.com
-      - THEMOVIEDB_API_KEY=YOUR_KEY
-      - SMTP_SERVER=smtp.gmail.com
-      - SMTP_PORT=587
-      - SMTP_ENCRYPTION=STARTTLS # use SSL for implicit TLS (port 465) or NONE to skip encryption
-      - SMTP_USERNAME=smtp-login@example.com # Optional if SMTP auth differs from FROM_EMAIL_ADDRESS
-      - FROM_NAME="Plex Forgotten Movies"
-      - FROM_EMAIL_ADDRESS=email@gmail.com
-      - EMAIL_PASSWORD=password # go make an app password https://myaccount.google.com/apppasswords
-      - BCC_EMAIL_ADDRESS=email@gmail.com #Optional, if you want to get any emails this sends
-      - ADMIN_NAME=admin_name # What name in the email do you want shown
-      - DAYS_SINCE_REQUEST=90 # How old should a request be until we email them about it
-      - DAYS_SINCE_REQUEST_EMAIL_TEXT=3 months # Human readable of DAYS_SINCE_REQUEST for the email text
-      - HOURS_BETWEEN_EMAILS=168 # How often to send an email to each person, 168 hours = 1 week is default
-      - JOB_INTERVAL_SECONDS=3600 # How often it runs and checks for unwatched media, 3600 seconds (1 hour) is default
-      - INITIAL_DELAY_SECONDS=300 # How long to wait after the app starts to check, gives you time to unsubscribe emails before it sends anything
-      - FLASK_SECRET_KEY=YOUR_KEY  #Random, generate it, somewhere like https://generate-random.org/encryption-keys
-      - LOG_LEVEL=INFO
-      - DEBUG_MODE=false #when this is true, the app will email the debug email instead of users, so you can use it for testing
-      - DEBUG_MAX_EMAILS=2 #so it doesn't email you over and over, it will email 2 times
-      - DEBUG_EMAIL=email@gmail.com
-      - DISABLE_SCHEDULER=false #this will have the scheduler start disabled, so it won't hit api's or email people
+      - PUID=${PUID}          # host user id (defined in .env)
+      - PGID=${PGID}          # host group id (defined in .env)
+      - TZ=${TZ}              # timezone (defined in .env)
+      # Optional: pin the Flask session key so logins survive restarts.
+      # If unset, one is generated and persisted to /app/data automatically.
+      # - FLASK_SECRET_KEY=change-me-to-a-long-random-string
+      # Optional: trust a reverse proxy's forwarded client IP (for rate limiting/audit).
+      # - TRUSTED_PROXIES=172.16.0.0/12,10.0.0.1
+      # - REAL_IP_HEADER=X-Forwarded-For
+      # Optional: shared Redis for rate-limit storage across restarts/instances.
+      # - REDIS_URL=redis://redis:6379/0
+      # Optional deployment tuning (defaults shown):
+      # - LOG_LEVEL=INFO
+      # - DATA_DIR=/app/data
     ports:
       - "8741:8741"
     volumes:
-      - <your_data_path>:/app/data  # Persist data outside the container
+      - <your_data_path>:/app/data  # Persist config, data, and logs outside the container

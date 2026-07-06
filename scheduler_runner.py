@@ -1,22 +1,35 @@
 import logging
-import os
 import signal
 import time
 
 from filelock import Timeout
 
+import config_store
 from forgotten_movies import is_scheduler_disabled
 from job_runner import JOB_LOCK_TIMEOUT, acquire_job_lock, execute_job
 
 LOGGER = logging.getLogger("ForgottenMoviesScheduler")
 LOGGER.setLevel(logging.INFO)
 
-JOB_INTERVAL_SECONDS = int(os.getenv("JOB_INTERVAL_SECONDS", 600))
-INITIAL_DELAY_SECONDS = int(os.getenv("INITIAL_DELAY_SECONDS", 600))
 SLEEP_GRANULARITY = 1
 
 _shutdown_requested = False
 _disabled_notice_logged = False
+_setup_notice_logged = False
+
+
+def _interval_seconds() -> int:
+    try:
+        return int(config_store.get("JOB_INTERVAL_SECONDS") or 600)
+    except (TypeError, ValueError):
+        return 600
+
+
+def _initial_delay_seconds() -> int:
+    try:
+        return int(config_store.get("INITIAL_DELAY_SECONDS") or 600)
+    except (TypeError, ValueError):
+        return 600
 
 
 def _request_shutdown(signum, frame) -> None:  # pragma: no cover - signal handler
@@ -40,31 +53,39 @@ def _sleep_with_interrupt(seconds: int) -> None:
 def main() -> None:
     LOGGER.info(
         "Scheduler process starting (initial delay %s s, interval %s s).",
-        INITIAL_DELAY_SECONDS,
-        JOB_INTERVAL_SECONDS,
+        _initial_delay_seconds(),
+        _interval_seconds(),
     )
-    _sleep_with_interrupt(INITIAL_DELAY_SECONDS)
+    _sleep_with_interrupt(_initial_delay_seconds())
 
-    global _disabled_notice_logged
+    global _disabled_notice_logged, _setup_notice_logged
     while not _shutdown_requested:
-        if is_scheduler_disabled():
-            if not _disabled_notice_logged:
-                LOGGER.info("Scheduler disabled; skipping automated runs until re-enabled.")
-                _disabled_notice_logged = True
+        if not config_store.is_setup_complete():
+            if not _setup_notice_logged:
+                LOGGER.info("Setup is not complete; scheduler is idle until the app is configured.")
+                _setup_notice_logged = True
         else:
-            if _disabled_notice_logged:
-                LOGGER.info("Scheduler re-enabled; resuming automated runs.")
-                _disabled_notice_logged = False
-            try:
-                lock = acquire_job_lock(timeout=JOB_LOCK_TIMEOUT)
-            except Timeout:
-                LOGGER.info("Job already running; skipping automated run.")
+            if _setup_notice_logged:
+                LOGGER.info("Setup complete; scheduler resuming.")
+                _setup_notice_logged = False
+            if is_scheduler_disabled():
+                if not _disabled_notice_logged:
+                    LOGGER.info("Scheduler disabled; skipping automated runs until re-enabled.")
+                    _disabled_notice_logged = True
             else:
+                if _disabled_notice_logged:
+                    LOGGER.info("Scheduler re-enabled; resuming automated runs.")
+                    _disabled_notice_logged = False
                 try:
-                    execute_job("scheduled")
-                finally:
-                    lock.release()
-        _sleep_with_interrupt(JOB_INTERVAL_SECONDS)
+                    lock = acquire_job_lock(timeout=JOB_LOCK_TIMEOUT)
+                except Timeout:
+                    LOGGER.info("Job already running; skipping automated run.")
+                else:
+                    try:
+                        execute_job("scheduled")
+                    finally:
+                        lock.release()
+        _sleep_with_interrupt(_interval_seconds())
 
     LOGGER.info("Scheduler process exiting.")
 

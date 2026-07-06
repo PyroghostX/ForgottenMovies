@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% block body_class %} class="public-page"{% endblock %}
+
+{% block content %}
+<div class="public-container" style="text-align: left;">
+    <h1 style="text-align:center;">Sign In</h1>
+    {% if messages %}
+        {% for category, text in messages %}
+            <div class="message {{ category }}"><span>{{ text }}</span></div>
+        {% endfor %}
+    {% endif %}
+    <form method="post" action="{{ url_for('login') }}">
+        {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" autocomplete="username" autofocus required>
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+        <button type="submit" style="width:100%; margin-top:0.5rem;">Sign In</button>
+    </form>
+</div>
+{% endblock %}

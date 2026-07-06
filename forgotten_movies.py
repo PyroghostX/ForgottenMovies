@@ -19,59 +19,113 @@ from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from jinja2 import Template, TemplateError
 from typing import NamedTuple
 
-TAUTULLI_API_KEY = os.getenv("TAUTULLI_API_KEY")
-TAUTULLI_URL = os.getenv("TAUTULLI_URL")
-OVERSEERR_API_KEY = os.getenv("OVERSEERR_API_KEY")
-OVERSEERR_URL = os.getenv("OVERSEERR_URL")
-SMTP_SERVER = os.getenv("SMTP_SERVER")
-SMTP_PORT = int(os.getenv("SMTP_PORT", 587))  # Default to 587 if not set
-SMTP_ENCRYPTION_RAW = os.getenv("SMTP_ENCRYPTION")
-if SMTP_ENCRYPTION_RAW:
-    SMTP_ENCRYPTION = SMTP_ENCRYPTION_RAW.strip().upper()
-else:
-    SMTP_ENCRYPTION = "SSL" if SMTP_PORT == 465 else "STARTTLS"
-if SMTP_ENCRYPTION not in {"STARTTLS", "SSL", "NONE"}:
-    raise RuntimeError("SMTP_ENCRYPTION must be one of STARTTLS, SSL, or NONE")
-FROM_EMAIL_ADDRESS = os.getenv("FROM_EMAIL_ADDRESS")
-FROM_NAME = os.getenv("FROM_NAME")
-SMTP_USERNAME = os.getenv("SMTP_USERNAME")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
-BCC_EMAIL_ADDRESS = os.getenv("BCC_EMAIL_ADDRESS")
-OVERSEERR_NUM_OF_HISTORY_RECORDS = int(os.getenv("OVERSEERR_NUM_OF_HISTORY_RECORDS", 10))  # Default 10
-ADMIN_NAME = os.getenv("ADMIN_NAME")
-THEMOVIEDB_API_KEY = os.getenv("THEMOVIEDB_API_KEY")
-DAYS_SINCE_REQUEST = int(os.getenv("DAYS_SINCE_REQUEST", 90))  # Default 90 days
-DAYS_SINCE_REQUEST_EMAIL_TEXT = os.getenv("DAYS_SINCE_REQUEST_EMAIL_TEXT", "3 months")
-REQUEST_URL = os.getenv("REQUEST_URL")
-HOURS_BETWEEN_EMAILS = int(os.getenv("HOURS_BETWEEN_EMAILS", 24))
-HOURS_BETWEEN_EMAILS_EMAIL_TEXT = os.getenv("HOURS_BETWEEN_EMAILS_EMAIL_TEXT", f"{HOURS_BETWEEN_EMAILS} hours")
-DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
-DEBUG_EMAIL = os.getenv("DEBUG_EMAIL")
-DEBUG_MAX_EMAILS = int(os.getenv("DEBUG_MAX_EMAILS", 2))
-TAUTULLI_NEW_REQUEST_METADATA_LIMIT = int(os.getenv("TAUTULLI_NEW_REQUEST_METADATA_LIMIT", 50))
-TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT = int(os.getenv("TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT", 30))
-JOB_INTERVAL_SECONDS = int(os.getenv("JOB_INTERVAL_SECONDS", 600))
+# Application version, surfaced in the dashboard footer and the /health response.
+APP_VERSION = "0.6.0"
 
-# Optional self-service unsubscribe feature
-UNSUBSCRIBE_SECRET_KEY = os.getenv("UNSUBSCRIBE_SECRET_KEY")
-_base_url = os.getenv("BASE_URL")
-BASE_URL = _base_url.rstrip("/") if _base_url else None
-UNSUBSCRIBE_ENABLED = bool(UNSUBSCRIBE_SECRET_KEY and BASE_URL)
+import config_store
+from config_store import is_setup_complete, get_or_create_unsubscribe_secret_key
 
-
-REQUIRED_ENV = {
-    "OVERSEERR_URL": OVERSEERR_URL,
-    "OVERSEERR_API_KEY": OVERSEERR_API_KEY,
-    # ...
-}
-missing = [name for name, value in REQUIRED_ENV.items() if not value]
-if missing:
-    raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
-
-# Initialize TinyDB
-# Ensure the data directory exists
-DATA_DIR = "/app/data"
+# The data directory is the one setting that stays environment driven, since it
+# is where the config store itself lives.
+DATA_DIR = config_store.DATA_DIR
 os.makedirs(DATA_DIR, exist_ok=True)
+
+# ---------------------------------------------------------------------------
+# Runtime configuration
+# ---------------------------------------------------------------------------
+# All application configuration now lives in config_store and is edited through
+# the in-app Settings page / onboarding wizard. The module-level names below are
+# a cache of the current values; load_runtime_config() refreshes them from the
+# store so saved changes apply live on the next job run / manual action without
+# requiring a container restart.
+TAUTULLI_API_KEY = None
+TAUTULLI_URL = None
+OVERSEERR_API_KEY = None
+OVERSEERR_URL = None
+SMTP_SERVER = None
+SMTP_PORT = 587
+SMTP_ENCRYPTION = "STARTTLS"
+FROM_EMAIL_ADDRESS = None
+FROM_NAME = None
+SMTP_USERNAME = None
+EMAIL_PASSWORD = None
+BCC_EMAIL_ADDRESS = None
+OVERSEERR_NUM_OF_HISTORY_RECORDS = 10
+ADMIN_NAME = None
+THEMOVIEDB_API_KEY = None
+DAYS_SINCE_REQUEST = 90
+DAYS_SINCE_REQUEST_EMAIL_TEXT = "3 months"
+REQUEST_URL = None
+HOURS_BETWEEN_EMAILS = 24
+HOURS_BETWEEN_EMAILS_EMAIL_TEXT = "24 hours"
+DEBUG_MODE = False
+DEBUG_EMAIL = None
+DEBUG_MAX_EMAILS = 2
+TAUTULLI_NEW_REQUEST_METADATA_LIMIT = 50
+TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT = 30
+JOB_INTERVAL_SECONDS = 600
+UNSUBSCRIBE_SECRET_KEY = None
+BASE_URL = None
+UNSUBSCRIBE_ENABLED = False
+
+
+def load_runtime_config() -> None:
+    """Refresh module-level config from the persistent store.
+
+    Called at import, at the start of each job run, and before manual send
+    actions so in-app settings changes take effect without a container restart.
+    """
+    global TAUTULLI_API_KEY, TAUTULLI_URL, OVERSEERR_API_KEY, OVERSEERR_URL
+    global SMTP_SERVER, SMTP_PORT, SMTP_ENCRYPTION, FROM_EMAIL_ADDRESS, FROM_NAME
+    global SMTP_USERNAME, EMAIL_PASSWORD, BCC_EMAIL_ADDRESS, OVERSEERR_NUM_OF_HISTORY_RECORDS
+    global ADMIN_NAME, THEMOVIEDB_API_KEY, DAYS_SINCE_REQUEST, DAYS_SINCE_REQUEST_EMAIL_TEXT
+    global REQUEST_URL, HOURS_BETWEEN_EMAILS, HOURS_BETWEEN_EMAILS_EMAIL_TEXT
+    global DEBUG_MODE, DEBUG_EMAIL, DEBUG_MAX_EMAILS
+    global TAUTULLI_NEW_REQUEST_METADATA_LIMIT, TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT
+    global JOB_INTERVAL_SECONDS, UNSUBSCRIBE_SECRET_KEY, BASE_URL, UNSUBSCRIBE_ENABLED
+
+    cfg = config_store.get_all()
+    TAUTULLI_API_KEY = cfg["TAUTULLI_API_KEY"]
+    TAUTULLI_URL = cfg["TAUTULLI_URL"]
+    OVERSEERR_API_KEY = cfg["OVERSEERR_API_KEY"]
+    OVERSEERR_URL = cfg["OVERSEERR_URL"]
+    SMTP_SERVER = cfg["SMTP_SERVER"]
+    SMTP_PORT = cfg["SMTP_PORT"] or 587
+    # Honor an explicit encryption choice; otherwise auto-pick SSL on port 465.
+    if config_store.is_configured("SMTP_ENCRYPTION"):
+        SMTP_ENCRYPTION = cfg["SMTP_ENCRYPTION"]
+    else:
+        SMTP_ENCRYPTION = "SSL" if SMTP_PORT == 465 else "STARTTLS"
+    FROM_EMAIL_ADDRESS = cfg["FROM_EMAIL_ADDRESS"]
+    FROM_NAME = cfg["FROM_NAME"]
+    SMTP_USERNAME = cfg["SMTP_USERNAME"]
+    EMAIL_PASSWORD = cfg["EMAIL_PASSWORD"]
+    BCC_EMAIL_ADDRESS = cfg["BCC_EMAIL_ADDRESS"]
+    OVERSEERR_NUM_OF_HISTORY_RECORDS = cfg["OVERSEERR_NUM_OF_HISTORY_RECORDS"] or 10
+    ADMIN_NAME = cfg["ADMIN_NAME"]
+    THEMOVIEDB_API_KEY = cfg["THEMOVIEDB_API_KEY"]
+    DAYS_SINCE_REQUEST = cfg["DAYS_SINCE_REQUEST"] or 90
+    DAYS_SINCE_REQUEST_EMAIL_TEXT = cfg["DAYS_SINCE_REQUEST_EMAIL_TEXT"] or "3 months"
+    REQUEST_URL = cfg["REQUEST_URL"]
+    HOURS_BETWEEN_EMAILS = cfg["HOURS_BETWEEN_EMAILS"] or 24
+    HOURS_BETWEEN_EMAILS_EMAIL_TEXT = cfg["HOURS_BETWEEN_EMAILS_EMAIL_TEXT"] or f"{HOURS_BETWEEN_EMAILS} hours"
+    DEBUG_MODE = bool(cfg["DEBUG_MODE"])
+    DEBUG_EMAIL = cfg["DEBUG_EMAIL"]
+    DEBUG_MAX_EMAILS = cfg["DEBUG_MAX_EMAILS"] or 2
+    TAUTULLI_NEW_REQUEST_METADATA_LIMIT = cfg["TAUTULLI_NEW_REQUEST_METADATA_LIMIT"] or 50
+    TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT = cfg["TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT"] or 30
+    JOB_INTERVAL_SECONDS = cfg["JOB_INTERVAL_SECONDS"] or 600
+    base = cfg["BASE_URL"]
+    BASE_URL = base.rstrip("/") if base else None
+    if BASE_URL:
+        UNSUBSCRIBE_SECRET_KEY = get_or_create_unsubscribe_secret_key()
+        UNSUBSCRIBE_ENABLED = True
+    else:
+        UNSUBSCRIBE_SECRET_KEY = None
+        UNSUBSCRIBE_ENABLED = False
+
+
+load_runtime_config()
 
 # Configure logging
 LOG_FILE_PATH = os.path.join(DATA_DIR, "forgotten_movies.log")
@@ -167,6 +221,88 @@ def load_email_template() -> Template:
 ensure_email_template()
 
 
+# Variables available to the email template, surfaced in the in-app editor.
+EMAIL_TEMPLATE_VARIABLES = [
+    ("plex_username", "The requester's Plex username"),
+    ("title", "Title of the movie or show"),
+    ("media_type", "'movie' or 'tv show'"),
+    ("time_since_text", "Human phrasing of the age threshold (e.g. '3 months')"),
+    ("plex_url", "Browser link to the item in Plex"),
+    ("mobile_url", "Mobile (plex://) deep link to the item"),
+    ("poster_url", "Poster image URL (blank if TMDB is not configured)"),
+    ("request_url", "Link to your request portal"),
+    ("admin_name", "The configured admin name"),
+    ("unsubscribe_url", "Per-recipient unsubscribe link (blank if disabled)"),
+]
+
+
+def get_email_template_source() -> str:
+    """Return the current effective email template source (custom or default)."""
+    ensure_email_template()
+    path = _resolve_email_template_path()
+    with open(path, "r", encoding="utf-8") as handle:
+        return handle.read()
+
+
+def get_default_email_template_source() -> str:
+    """Return the built-in default template source."""
+    ensure_email_template()
+    with open(EMAIL_TEMPLATE_ORIGINAL_PATH, "r", encoding="utf-8") as handle:
+        return handle.read()
+
+
+def is_using_custom_email_template() -> bool:
+    return bool(CUSTOM_EMAIL_TEMPLATE_PATH and os.path.exists(CUSTOM_EMAIL_TEMPLATE_PATH))
+
+
+def save_email_template_source(source: str) -> None:
+    """Validate and persist a custom email template, then invalidate the cache."""
+    if not source or not source.strip():
+        raise ValueError("Template cannot be empty.")
+    try:
+        Template(source)  # compile first to catch syntax errors before saving
+    except TemplateError as exc:
+        raise ValueError(f"Template has a syntax error: {exc}") from exc
+    os.makedirs(os.path.dirname(CUSTOM_EMAIL_TEMPLATE_PATH), exist_ok=True)
+    with open(CUSTOM_EMAIL_TEMPLATE_PATH, "w", encoding="utf-8") as handle:
+        handle.write(source)
+    _invalidate_email_template_cache()
+    logger.info("Custom email template saved to %s", CUSTOM_EMAIL_TEMPLATE_PATH)
+
+
+def reset_email_template() -> None:
+    """Remove the custom template so the built-in default is used again."""
+    if CUSTOM_EMAIL_TEMPLATE_PATH and os.path.exists(CUSTOM_EMAIL_TEMPLATE_PATH):
+        os.remove(CUSTOM_EMAIL_TEMPLATE_PATH)
+        logger.info("Custom email template removed; reverting to default.")
+    _invalidate_email_template_cache()
+
+
+def _invalidate_email_template_cache() -> None:
+    global EMAIL_TEMPLATE_CACHE, EMAIL_TEMPLATE_MTIME, EMAIL_TEMPLATE_CACHE_PATH
+    EMAIL_TEMPLATE_CACHE = None
+    EMAIL_TEMPLATE_MTIME = None
+    EMAIL_TEMPLATE_CACHE_PATH = None
+
+
+def render_email_preview(source: str | None = None) -> str:
+    """Render the template (a draft, or the current one) with sample data."""
+    sample = SafeDict(
+        plex_username="alex",
+        media_type="movie",
+        title="The Grand Budapest Hotel",
+        time_since_text=DAYS_SINCE_REQUEST_EMAIL_TEXT,
+        plex_url="https://app.plex.tv/desktop",
+        poster_url="",
+        mobile_url="",
+        request_url=REQUEST_URL or "https://request.example.com",
+        admin_name=ADMIN_NAME or "your admin",
+        unsubscribe_url="#",
+    )
+    template = Template(source) if source else load_email_template()
+    return template.render(**sample)
+
+
 def build_email_body(
     plex_username: str,
     media_type: str,
@@ -238,9 +374,51 @@ def flush_log_handlers() -> None:
         except Exception:
             pass
 # Store TinyDB databases in the persistent directory
-request_db = TinyDB(os.path.join(DATA_DIR, "request_data.json"))
-email_db = TinyDB(os.path.join(DATA_DIR, "email_data.json"))
-email_users_db = TinyDB(os.path.join(DATA_DIR, "email_users.json"))
+class LockedTinyDB:
+    """Proxy around a TinyDB instance that serializes every table operation.
+
+    TinyDB does a full read-modify-write of the JSON file per operation with no
+    locking, so the two gunicorn workers and the scheduler process writing the
+    same file can lose updates or leave the file half-written (a torn read then
+    raises JSONDecodeError). We hold an in-process RLock (thread safety) plus a
+    cross-process FileLock (inter-process) for the duration of each operation,
+    which makes reads and read-modify-writes atomic across all readers/writers.
+    """
+
+    _LOCKED_METHODS = frozenset({
+        "insert", "insert_multiple", "update", "update_multiple", "upsert",
+        "remove", "get", "search", "all", "contains", "count", "truncate",
+    })
+
+    def __init__(self, db: TinyDB, lock_path: str):
+        self._db = db
+        self._file_lock = FileLock(lock_path)
+        self._thread_lock = RLock()
+
+    def __getattr__(self, name):
+        # Only called for attributes not found normally (i.e. not _db/_file_lock
+        # /_thread_lock), so there is no recursion on our own instance attrs.
+        attr = getattr(self._db, name)
+        if name in LockedTinyDB._LOCKED_METHODS and callable(attr):
+            def _locked(*args, **kwargs):
+                with self._thread_lock, self._file_lock:
+                    return attr(*args, **kwargs)
+            return _locked
+        return attr
+
+
+request_db = LockedTinyDB(
+    TinyDB(os.path.join(DATA_DIR, "request_data.json")),
+    os.path.join(DATA_DIR, "request_data.lock"),
+)
+email_db = LockedTinyDB(
+    TinyDB(os.path.join(DATA_DIR, "email_data.json")),
+    os.path.join(DATA_DIR, "email_data.lock"),
+)
+email_users_db = LockedTinyDB(
+    TinyDB(os.path.join(DATA_DIR, "email_users.json")),
+    os.path.join(DATA_DIR, "email_users.lock"),
+)
 SETTINGS_DB_PATH = os.path.join(DATA_DIR, "settings.json")
 settings_db = TinyDB(SETTINGS_DB_PATH)
 SETTINGS_LOCK_PATH = os.path.join(DATA_DIR, "settings.lock")
@@ -1167,6 +1345,45 @@ def _check_tautulli_connection(timeout=(5, 15)) -> bool:
         logger.error("TAUTULLI CONNECTION FAILED: invalid JSON response (%s)", exc)
         return False
 
+def test_overseerr_connection(url: str, api_key: str, timeout=(5, 10)) -> tuple[bool, str]:
+    """Test Seerr connectivity with explicit values (used by the setup wizard)."""
+    url = (url or "").strip().rstrip("/")
+    api_key = (api_key or "").strip()
+    if not url or not api_key:
+        return False, "URL and API key are required."
+    try:
+        resp = requests.get(
+            f"{url}/request",
+            params={"take": 1, "filter": "available", "sort": "added"},
+            headers={"X-Api-Key": api_key},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        return True, "Connected to Seerr successfully."
+    except requests.RequestException as exc:
+        return False, f"Seerr connection failed: {exc}"
+
+
+def test_tautulli_connection(url: str, api_key: str, timeout=(5, 10)) -> tuple[bool, str]:
+    """Test Tautulli connectivity with explicit values (used by the setup wizard)."""
+    url = (url or "").strip()
+    api_key = (api_key or "").strip()
+    if not url or not api_key:
+        return False, "URL and API key are required."
+    try:
+        resp = requests.get(url, params={"apikey": api_key, "cmd": "get_server_info"}, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("response", {}).get("result") != "success":
+            return False, "Tautulli responded but the API key may be invalid."
+        server = data.get("response", {}).get("data", {}).get("pms_name") or "Tautulli"
+        return True, f"Connected to {server} successfully."
+    except requests.RequestException as exc:
+        return False, f"Tautulli connection failed: {exc}"
+    except ValueError:
+        return False, "Tautulli returned an invalid (non-JSON) response."
+
+
 def run_startup_checks() -> bool:
     logger.info("Running startup connectivity checks.")
     seer_ok = _check_overseerr_connection()
@@ -1637,6 +1854,10 @@ def send_email(to_address, subject, body, is_html=False, unsubscribe_url=None):
 
 # Main logic
 def main():
+    load_runtime_config()
+    if not is_setup_complete():
+        logger.info("Setup is not complete; skipping run until the app is configured via the web UI.")
+        return
     if not _check_overseerr_connection():
         logger.info("Aborting run due to Seerr connectivity issues.")
         return

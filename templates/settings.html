@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_config_fields.html" import render_field, section_tests %}
 
 {% block extra_head %}
 <style>
@@ -19,14 +20,41 @@
         pointer-events: auto;
     }
     @media (max-width: 720px) {
-        .settings-toast-container {
-            top: 4.75rem;
-        }
+        .settings-toast-container { top: 4.75rem; }
     }
 </style>
 {% endblock %}
 
 {% block content %}
+<form method="post" action="{{ url_for('save_config') }}" id="config-form">
+    <input type="hidden" name="present_keys" value="{{ present_keys }}">
+    {% for section in sections %}
+        <div class="card">
+            <h2>{{ section.name }}</h2>
+            <div class="config-grid">
+                {% for field in section.fields %}
+                    {{ render_field(field) }}
+                {% endfor %}
+            </div>
+            {{ section_tests(section.name) }}
+        </div>
+    {% endfor %}
+    <div class="card">
+        <button type="submit" style="font-size:1.02rem; padding:0.7rem 1.8rem;">Save Settings</button>
+        <p class="help-text">Changes apply on the next scan or manual action — no restart needed.</p>
+    </div>
+</form>
+
+<div class="card">
+    <h2>Email Template</h2>
+    <p>Customize the reminder email that recipients receive.</p>
+    <p class="help-text">
+        Edit the HTML, preview it with sample data, and send yourself a test.
+        {% if using_custom_template %}A custom template is currently active.{% else %}Currently using the default template.{% endif %}
+    </p>
+    <p><a href="{{ url_for('email_template_editor') }}" style="color:#c5cae9; font-weight:700;">Open Email Template Editor</a></p>
+</div>
+
 <div class="card">
     <h2>Scheduler</h2>
     <p class="help-text">
@@ -80,7 +108,7 @@
     <h2>Refresh Unknown Metadata</h2>
     <p>Ask Tautulli to fill in recent requests that still have unknown titles.</p>
     <p class="help-text">
-        This runs the recent unknown metadata refresh only, using TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT.
+        This runs the recent unknown metadata refresh only, using the configured refresh limit.
     </p>
     <form method="post" action="{{ url_for('refresh_unknown_metadata') }}" data-async-action data-running-message="Recent unknown metadata refresh is running. View the logs for details.">
         <button type="submit">Refresh Unknown Metadata Now</button>
@@ -120,6 +148,7 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="{{ url_for('asset', filename='config_forms.js') }}"></script>
 <script>
     (function() {
         const forms = Array.from(document.querySelectorAll("form[data-async-action]"));
@@ -173,31 +202,22 @@
             form.addEventListener("submit", (event) => {
                 event.preventDefault();
                 const button = form.querySelector("button[type='submit']");
-                if (button) {
-                    button.disabled = true;
-                }
+                if (button) { button.disabled = true; }
                 fetch(form.action, {
                     method: "POST",
                     body: new FormData(form),
-                    headers: {
-                        "Accept": "application/json",
-                        "X-Requested-With": "fetch"
-                    }
+                    headers: { "Accept": "application/json", "X-Requested-With": "fetch" }
                 })
                     .then((response) => response.json().then((data) => ({ ok: response.ok, data })))
                     .then(({ ok, data }) => {
                         flash(data.message || form.dataset.runningMessage || "Action started.", data.category || (ok ? "info" : "error"));
-                        if (data.task_id) {
-                            pollTask(data.task_id);
-                        }
+                        if (data.task_id) { pollTask(data.task_id); }
                     })
                     .catch(() => {
                         flash("Unable to start action. View the logs for details.", "error");
                     })
                     .finally(() => {
-                        if (button) {
-                            button.disabled = false;
-                        }
+                        if (button) { button.disabled = false; }
                     });
             });
         });

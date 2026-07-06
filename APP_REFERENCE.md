@@ -4,7 +4,9 @@ This note is a working map of the app so future changes can start from the right
 
 ## Runtime Shape
 
-- `forgotten_movies.py` is the core application module. It loads configuration from environment variables, initializes TinyDB stores in `/app/data`, talks to Seerr/Tautulli/TMDB/SMTP, and contains the scheduled job logic.
+- `config_store.py` is the configuration layer and the single source of truth for all application settings (connections, email/SMTP, reminder rules, debug). Values are persisted in `app_config.json` in the data dir, edited via the in-app setup wizard and Settings page, and served through a file-locked, mtime-cached API so the web workers and scheduler process stay coherent. It also holds the admin credentials (hashed), setup-complete flag, and auto-generated `FLASK_SECRET_KEY`/unsubscribe secret. Environment variables are read only to pre-fill the setup wizard (migration aid) — never at runtime. The `CONFIG_SCHEMA` list defines every UI-editable setting.
+- `forgotten_movies.py` is the core application module. `load_runtime_config()` refreshes its module-level config from `config_store` at import, at the start of each job, and before manual sends, so changes apply live without a restart. It initializes TinyDB stores in the data dir, talks to Seerr/Tautulli/TMDB/SMTP, and contains the scheduled job logic. `main()` no-ops until `config_store.is_setup_complete()` is true.
+- Authentication & onboarding live in `webapp.py`: a `before_request` gate refreshes live config and enforces setup (redirect to `/setup`) then login (redirect to `/login`). `PUBLIC_ENDPOINTS` (health, static, token-based unsubscribe) and `SETUP_ENDPOINTS` (wizard + its test buttons) bypass the gate as appropriate.
 - `webapp.py` is the Flask dashboard. It imports helpers and TinyDB handles from `forgotten_movies.py`, renders templates, and exposes manual actions.
 - `scheduler_runner.py` starts the recurring job loop. It checks the scheduler-disabled setting before running.
 - `job_runner.py` wraps `forgotten_movies.main()` with a file lock so manual and scheduled jobs do not overlap.

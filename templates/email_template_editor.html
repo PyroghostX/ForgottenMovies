@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+
+{% block extra_head %}
+<style>
+    .editor-layout { display: grid; grid-template-columns: 1fr 300px; gap: 1.5rem; align-items: start; }
+    @media (max-width: 960px) { .editor-layout { grid-template-columns: 1fr; } }
+    .template-textarea {
+        width: 100%;
+        min-height: 460px;
+        font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+        font-size: 0.85rem;
+        line-height: 1.5;
+        resize: vertical;
+        white-space: pre;
+        overflow-wrap: normal;
+    }
+    .var-list { list-style: none; padding: 0; margin: 0; }
+    .var-list li { margin-bottom: 0.75rem; }
+    .var-list code {
+        background-color: #121212;
+        border: 1px solid #333;
+        border-radius: 4px;
+        padding: 0.15rem 0.4rem;
+        color: #80cbc4;
+        cursor: pointer;
+    }
+    .var-list .var-desc { display: block; font-size: 0.8rem; color: #9e9e9e; margin-top: 0.2rem; }
+    .preview-frame {
+        width: 100%;
+        min-height: 460px;
+        border: 1px solid #333;
+        border-radius: 8px;
+        background: #fff;
+    }
+    .editor-actions { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; margin-top: 1rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% if messages %}
+    {% for category, text in messages %}
+        <div class="message {{ category }}"><span>{{ text }}</span></div>
+    {% endfor %}
+{% endif %}
+
+<div class="card">
+    <p style="margin-top:0;">
+        Edit the reminder email below. It's rendered with
+        <a href="https://jinja.palletsprojects.com/templates/" target="_blank" rel="noopener" style="color:#c5cae9;">Jinja</a>,
+        so use <code>{{ '{{ variable }}' }}</code> placeholders.
+        {% if using_custom %}
+            <strong style="color:#80cbc4;">A custom template is active.</strong>
+        {% else %}
+            You're currently editing a copy of the built-in default.
+        {% endif %}
+    </p>
+
+    <div class="editor-layout">
+        <div>
+            <form method="post" action="{{ url_for('save_email_template') }}" id="template-form">
+                <textarea class="template-textarea" name="template_source" id="template_source" spellcheck="false">{{ template_source }}</textarea>
+                <div class="editor-actions">
+                    <button type="submit">Save Template</button>
+                    <button type="button" id="preview-btn" class="secondary-btn">Preview</button>
+                </div>
+            </form>
+
+            <div class="editor-actions">
+                <input type="email" class="test-email-input" placeholder="Send test to… (blank = From address)"
+                       style="max-width: 300px; margin-bottom:0;">
+                <button type="button" class="secondary-btn test-email-btn">Send Test Email</button>
+                <span class="test-result" data-for="email"></span>
+            </div>
+            <p class="help-text">The test email uses the currently <strong>saved</strong> template, so save first to test edits.</p>
+
+            <form method="post" action="{{ url_for('reset_email_template_route') }}"
+                  onsubmit="return confirm('Discard your custom template and revert to the default?');"
+                  style="margin-top:1rem;">
+                <button type="submit" style="background-color:#e53935;">Reset to Default</button>
+            </form>
+        </div>
+
+        <div>
+            <h3 style="margin-top:0;">Available variables</h3>
+            <p class="help-text" style="margin-top:0;">Click to copy.</p>
+            <ul class="var-list">
+                {% for name, desc in variables %}
+                    <li>
+                        <code class="var-token" data-token="{{ '{{ ' ~ name ~ ' }}' }}">{{ '{{ ' ~ name ~ ' }}' }}</code>
+                        <span class="var-desc">{{ desc }}</span>
+                    </li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+</div>
+
+<div class="card" id="preview-card" style="display:none;">
+    <h2>Preview</h2>
+    <p class="help-text" style="margin-top:0;">Rendered with sample data.</p>
+    <iframe class="preview-frame" id="preview-frame" title="Email preview"></iframe>
+</div>
+
+<p><a href="{{ url_for('settings') }}" style="color:#c5cae9; font-weight:700;">← Back to Settings</a></p>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('asset', filename='config_forms.js') }}"></script>
+<script>
+    (function () {
+        const textarea = document.getElementById("template_source");
+
+        // Click a variable token to insert it at the cursor.
+        document.querySelectorAll(".var-token").forEach(function (el) {
+            el.addEventListener("click", function () {
+                const token = el.getAttribute("data-token");
+                if (!textarea) { return; }
+                const start = textarea.selectionStart || 0;
+                const end = textarea.selectionEnd || 0;
+                textarea.value = textarea.value.slice(0, start) + token + textarea.value.slice(end);
+                textarea.focus();
+                textarea.selectionStart = textarea.selectionEnd = start + token.length;
+            });
+        });
+
+        const previewBtn = document.getElementById("preview-btn");
+        const previewCard = document.getElementById("preview-card");
+        const previewFrame = document.getElementById("preview-frame");
+        if (previewBtn) {
+            previewBtn.addEventListener("click", function () {
+                const data = new FormData();
+                data.set("template_source", textarea ? textarea.value : "");
+                previewBtn.disabled = true;
+                fetch("{{ url_for('preview_email_template') }}", {
+                    method: "POST",
+                    body: data,
+                    headers: { "Accept": "application/json", "X-Requested-With": "fetch" }
+                })
+                    .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+                    .then(function (res) {
+                        if (res.data.ok) {
+                            previewCard.style.display = "block";
+                            previewFrame.srcdoc = res.data.html;
+                            previewCard.scrollIntoView({ behavior: "smooth" });
+                        } else {
+                            alert(res.data.message || "Preview failed.");
+                        }
+                    })
+                    .catch(function () { alert("Preview request failed."); })
+                    .finally(function () { previewBtn.disabled = false; });
+            });
+        }
+    })();
+</script>
+{% endblock %}

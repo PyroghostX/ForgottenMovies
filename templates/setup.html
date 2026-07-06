@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% from "_config_fields.html" import render_field, section_tests %}
+
+{% block content %}
+<div class="card" style="background: linear-gradient(135deg, #1e1e2f 0%, #24243e 100%);">
+    <h2 style="margin-bottom:0.4rem;">Welcome to Forgotten Movies</h2>
+    <p class="help-text" style="margin-top:0;">
+        Let's get set up. Create an admin account and connect your services below.
+        Everything here is stored inside the app — no more editing docker-compose.
+        You can change any of this later on the Settings page.
+    </p>
+</div>
+
+{% if messages %}
+    {% for category, text in messages %}
+        <div class="message {{ category }}"><span>{{ text }}</span></div>
+    {% endfor %}
+{% endif %}
+
+<form method="post" action="{{ url_for('setup') }}" id="setup-form">
+    <input type="hidden" name="present_keys" value="{{ present_keys }}">
+
+    <div class="card">
+        <h2>1. Admin Account</h2>
+        <p class="help-text" style="margin-top:0;">You'll use this to sign in to the dashboard.</p>
+        <div class="config-grid">
+            <div class="field">
+                <label for="admin_username">Username <span class="req-star">*</span></label>
+                <input id="admin_username" name="admin_username" type="text" autocomplete="username" required>
+            </div>
+            <div class="field">
+                <label for="admin_password">Password <span class="req-star">*</span></label>
+                <input id="admin_password" name="admin_password" type="password" autocomplete="new-password"
+                       minlength="8" required>
+                <p class="help-text" style="margin-top:0.15rem;">At least 8 characters.</p>
+            </div>
+            <div class="field">
+                <label for="admin_password_confirm">Confirm password <span class="req-star">*</span></label>
+                <input id="admin_password_confirm" name="admin_password_confirm" type="password"
+                       autocomplete="new-password" required>
+            </div>
+        </div>
+    </div>
+
+    {% set step = namespace(n=1) %}
+    {% for section in sections %}
+        {% set step.n = step.n + 1 %}
+        <div class="card">
+            <h2>{{ step.n }}. {{ section.name }}</h2>
+            <div class="config-grid">
+                {% for field in section.fields %}
+                    {{ render_field(field) }}
+                {% endfor %}
+            </div>
+            {{ section_tests(section.name) }}
+        </div>
+    {% endfor %}
+
+    <div class="card">
+        <button type="submit" style="font-size:1.05rem; padding:0.8rem 2rem;">Finish Setup</button>
+        <p class="help-text">Required fields are marked with <span class="req-star">*</span>.</p>
+    </div>
+</form>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('asset', filename='config_forms.js') }}"></script>
+{% endblock %}

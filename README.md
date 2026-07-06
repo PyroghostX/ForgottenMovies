@@ -5,8 +5,10 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Seerr for r
 
 # Features
 
+- **Guided setup:** A first-run wizard creates your admin login and connects Seerr, Tautulli, and SMTP — with built-in **Test** buttons — so no configuration lives in `docker-compose`.
+- **In-app configuration:** Every setting is editable from the **Settings** page and applies live, no restart required. The dashboard is protected by a username/password login.
 - **Automated reminders:** Periodically scan Seerr, cross-reference Tautulli history, and sends emails via SMTP to the original requester.
-- **Custom email template:** Default ships to `/app/data/email_template_original.html`; add `/app/data/email_template.html` to override while still receiving upstream updates.
+- **Built-in email template editor:** Edit the reminder email in the app with a variable reference, live preview, and test send — or fall back to the default at any time.
 - **Dashboard:** Kick off manual runs, review the upcoming reminder queue, see recently sent reminders, and manage unsubscribed addresses.
 - **Stats:** See the numbers of who requests stuff and who actually watches it.
 - **Self-service unsubscribe (optional):** Let users unsubscribe themselves via encrypted links in emails instead of managing the list manually. Works with any reverse proxy setup.
@@ -41,7 +43,22 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Seerr for r
   <img src="files/screenshot_website_2.png" alt="Screenshot Website" width="788">
 </p>
 
-# Environment Variables
+# First-Run Setup
+
+Start the container, then open `http://<host>:8741` in a browser. A setup wizard walks you through everything — no `docker-compose` editing required:
+
+1. **Create an admin account** — a username and password to sign in to the dashboard.
+2. **Connect your services** — Seerr, Tautulli, and (optionally) TheMovieDB, each with a **Test** button.
+3. **Configure email** — SMTP settings, with a **Send Test Email** button to confirm delivery before you go live.
+4. **Set your reminder rules** — how old a request must be, how often to remind, and so on.
+
+Everything is stored inside the app's data directory. You can change any of it later under **Settings**, and edit the reminder email itself under **Settings → Email Template** (with live preview and a test send). Changes apply on the next scan — no restart needed.
+
+> **Upgrading from an earlier version?** Your existing `docker-compose` values are read once to pre-fill the wizard, so just review them and click through. After setup completes, the in-app configuration is authoritative and those environment variables are ignored — you can delete the app settings from your compose file (see `docker-compose.yml-example`).
+
+# Configuration Reference
+
+Every setting below is configured in the web UI (**Settings** page); this table is just a reference for what each one does. The only values that remain environment variables are the deployment/infrastructure settings near the bottom (`FLASK_SECRET_KEY`, `TRUSTED_PROXIES`, `REAL_IP_HEADER`, `REDIS_URL`, `LOG_*`, `DATA_DIR`, `GUNICORN_*`, and the Docker `PUID`/`PGID`/`TZ`/`ROOT`).
 
 | Key | Description |
 |-----|-------------|
@@ -67,15 +84,14 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Seerr for r
 | `LOG_FILE_MAX_BYTES`, `LOG_FILE_BACKUP_COUNT` | Rotating file handler settings (defaults: 1 MB, 3 backups). |
 | `DEBUG_MODE` | When `true`, reroutes mail to `DEBUG_EMAIL`/`FROM_EMAIL_ADDRESS` and enforces `DEBUG_MAX_EMAILS` per run. |
 | `DEBUG_EMAIL`, `DEBUG_MAX_EMAILS` | Override receiving address and cap while in debug mode (default max = 2). |
-| `FLASK_SECRET_KEY` | Session/flash signing key for the Flask UI. |
-| `EMAIL_TEMPLATE_PATH` | Optional custom override path for the HTML template (defaults to `/app/data/email_template.html`). |
-| `UNSUBSCRIBE_SECRET_KEY` | Optional: Secret key for signing unsubscribe tokens. Generate with `python -c "import secrets; print(secrets.token_hex(32))"`. Leave unset to disable self-service unsubscribe. |
-| `BASE_URL` | Optional: Public URL where your instance is accessible (e.g. `https://forgotten.example.com`). Required only when `UNSUBSCRIBE_SECRET_KEY` is set. |
+| `FLASK_SECRET_KEY` | **Env-only, optional.** Session/flash signing key for the Flask UI. If unset, a random key is generated and persisted to the data directory automatically. |
+| `EMAIL_TEMPLATE_PATH` | **Env-only, optional.** Override path for the custom HTML template (defaults to `/app/data/email_template.html`, which the in-app Email Template editor writes to). |
+| `BASE_URL` | **Configured in the UI** (Self-Service). Public URL where your instance is reachable (e.g. `https://forgotten.example.com`). Setting it enables one-click self-service unsubscribe links; the signing secret is generated and persisted automatically. |
 | `TRUSTED_PROXIES` | Comma-separated IPs or CIDRs of trusted reverse proxies (e.g. `172.16.0.0/12,10.0.0.1`). Required to trust `REAL_IP_HEADER`. |
 | `REAL_IP_HEADER` | Header containing client IP set by your reverse proxy (default: `X-Forwarded-For`). Only trusted when request comes from `TRUSTED_PROXIES`. Used for subscription management logging. |
 | `REDIS_URL` | Optional Redis URL for rate limiting storage (e.g. `redis://localhost:6379/0`). Defaults to in-memory storage, which doesn't persist across restarts or scale across instances. |
 | `JOB_LOCK_TIMEOUT` | Seconds to wait when acquiring the inter-process job lock (default `0.1`). |
-| `ROOT`, `PUID`, `PGID`, `TZ` | Docker-only: bind mount root, container UID/GID, timezone. |
+| `ROOT`, `PUID`, `PGID`, `TZ` | Docker-only: bind mount root, container UID/GID, timezone. The container starts as root only to remap the runtime user to `PUID`/`PGID` and fix data-dir ownership, then drops to that non-root user (default `1000:1000`) for the app itself. |
 
 > **Tip:** When credentials contain characters such as `!`, `$`, `&`, or `#`, wrap the value in quotes (or store them inside an `.env` file) so your shell/YAML parser doesn't truncate or reinterpret the password.
 > **Important:** The email template is mandatory. If neither `/app/data/email_template.html` nor `/app/data/email_template_original.html` can be read or formatted with the supplied placeholders, the job raises an error and no reminders are sent. This prevents accidents with blank messages.

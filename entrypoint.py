@@ -5,6 +5,7 @@ import sys
 import time
 from typing import List
 
+import config_store
 from forgotten_movies import run_startup_checks
 
 
@@ -32,7 +33,13 @@ def _build_gunicorn_command() -> List[str]:
 
 
 def main() -> None:
-    run_startup_checks()
+    if config_store.is_setup_complete():
+        run_startup_checks()
+    else:
+        print(
+            "Forgotten Movies is not configured yet. Open the web UI to run first-time setup.",
+            flush=True,
+        )
 
     processes = []
 

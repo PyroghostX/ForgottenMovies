@@ -5,6 +5,7 @@ import os
 import time
 import uuid
 from datetime import datetime
+from functools import wraps
 from threading import Thread
 
 from flask import (
@@ -16,11 +17,26 @@ from flask import (
     render_template,
     request,
     send_from_directory,
+    session,
     url_for,
 )
 from flask_limiter import Limiter
 
+import config_store
+import forgotten_movies as fm
+from config_store import (
+    CONFIG_SCHEMA,
+    SECTIONS,
+    env_prefill,
+    is_setup_complete,
+    mark_setup_complete,
+    save_settings,
+    set_admin,
+    validate_required,
+    verify_admin,
+)
 from forgotten_movies import (
+    APP_VERSION,
     add_unsubscribed_email,
     check_unwatched_emails_status,
     flush_log_handlers,
@@ -39,12 +55,19 @@ from forgotten_movies import (
     request_db,
     Request,
     refresh_metadata_for_recent_unknowns,
+    send_email,
     set_scheduler_disabled,
     set_log_level,
-    TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT,
+    test_overseerr_connection,
+    test_tautulli_connection,
+    get_email_template_source,
+    get_default_email_template_source,
+    is_using_custom_email_template,
+    save_email_template_source,
+    reset_email_template,
+    render_email_preview,
+    EMAIL_TEMPLATE_VARIABLES,
     _attempt_send_request,
-    DEBUG_MODE,
-    UNSUBSCRIBE_ENABLED,
     _decrypt_email,
     build_resubscribe_url,
 )
@@ -56,8 +79,67 @@ APP_LOGGER = logging.getLogger("ForgottenMoviesWeb")
 APP_LOGGER.setLevel(logging.INFO)
 BACKGROUND_TASKS: dict[str, dict[str, str]] = {}
 
+# Endpoints reachable without authentication or completed setup. Token-based
+# unsubscribe pages are used by email recipients, not the admin, so they stay
+# public; static assets and the health check are always public.
+PUBLIC_ENDPOINTS = {
+    "login",
+    "static",
+    "asset",
+    "favicon",
+    "health",
+    "unsubscribe_via_link",
+    "resubscribe_via_link",
+}
+
+# Endpoints reachable during first-run onboarding (before an admin exists).
+SETUP_ENDPOINTS = {"setup", "test_connection", "send_test_email"}
+
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-me")
+app.secret_key = config_store.get_or_create_flask_secret_key()
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+)
+
+
+@app.context_processor
+def inject_app_version():
+    """Expose version and setup state to every template."""
+    return {
+        "app_version": APP_VERSION,
+        "authenticated": bool(session.get("authenticated")),
+        "setup_complete": is_setup_complete(),
+    }
+
+
+def login_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if not session.get("authenticated"):
+            return redirect(url_for("login", next=request.path))
+        return view(*args, **kwargs)
+    return wrapped
+
+
+@app.before_request
+def _gate_requests():
+    """Refresh live config and enforce setup/auth gating on every request."""
+    fm.load_runtime_config()
+    endpoint = request.endpoint or ""
+    if endpoint in PUBLIC_ENDPOINTS:
+        return None
+    # First-run onboarding: everything funnels to /setup until it is complete.
+    if not is_setup_complete():
+        if endpoint in SETUP_ENDPOINTS:
+            return None
+        return redirect(url_for("setup"))
+    # After setup, require authentication for management endpoints.
+    if not session.get("authenticated"):
+        if endpoint == "login":
+            return None
+        return redirect(url_for("login", next=request.path))
+    return None
 
 # Trusted proxy configuration
 TRUSTED_PROXIES = os.getenv("TRUSTED_PROXIES", "")
@@ -401,7 +483,7 @@ def send_request_now(request_id):
             user_record=user_record,
             respect_cycle=False,
             respect_cooldown=False,
-            perform_db_updates=not DEBUG_MODE,
+            perform_db_updates=not fm.DEBUG_MODE,
             allow_sleep=False,
             now_dt=now,
         )
@@ -415,7 +497,7 @@ def send_request_now(request_id):
         flash(outcome.message or "Reminder not sent.", "todo-info")
         return _redirect_after_request_action("todo-card")
 
-    if DEBUG_MODE:
+    if fm.DEBUG_MODE:
         flash(f"[Debug] {outcome.message} (not persisted).", "todo-info")
     else:
         flash(outcome.message, "todo-success")
@@ -489,7 +571,7 @@ def remove_email():
 @app.route("/unsubscribe/<token>", methods=["GET", "POST"])
 @limiter.limit("10 per minute")
 def unsubscribe_via_link(token: str):
-    if not UNSUBSCRIBE_ENABLED:
+    if not fm.UNSUBSCRIBE_ENABLED:
         APP_LOGGER.warning("Unsubscribe endpoint accessed but feature is disabled")
         if request.method == "POST":
             return "Feature disabled", 404
@@ -560,7 +642,7 @@ def unsubscribe_via_link(token: str):
 @app.route("/resubscribe/<token>", methods=["GET", "POST"])
 @limiter.limit("10 per minute")
 def resubscribe_via_link(token: str):
-    if not UNSUBSCRIBE_ENABLED:
+    if not fm.UNSUBSCRIBE_ENABLED:
         APP_LOGGER.warning("Resubscribe endpoint accessed but feature is disabled")
         if request.method == "POST":
             return "Feature disabled", 404
@@ -657,8 +739,8 @@ def settings_task_status(task_id: str):
 
 
 @app.route("/health", methods=["GET"])
-def health() -> tuple[str, int]:
-    return "ok", 200
+def health():
+    return jsonify({"status": "ok", "version": APP_VERSION}), 200
 
 
 @app.route("/logs", methods=["GET"])
@@ -719,6 +801,189 @@ def logs_data():
     return jsonify({"log": log_text})
 
 
+# ---------------------------------------------------------------------------
+# Configuration form helpers (shared by the setup wizard and Settings page)
+# ---------------------------------------------------------------------------
+def _config_field_view(field: dict, use_env_prefill: bool = False) -> dict:
+    key = field["key"]
+    is_secret = field["type"] == "secret"
+    is_set = config_store.is_configured(key)
+    stored = config_store.get(key)  # effective value, includes defaults
+
+    prefill = env_prefill(key) if (use_env_prefill and not is_set) else ""
+
+    if is_secret:
+        value = ""  # never echo secrets back to the browser
+    elif prefill:
+        value = prefill
+    else:
+        value = "" if stored is None else stored
+
+    if field["type"] == "bool":
+        if is_set:
+            checked = bool(stored)
+        elif prefill:
+            checked = str(prefill).strip().lower() in {"1", "true", "on", "yes"}
+        else:
+            checked = bool(stored)
+    else:
+        checked = False
+
+    return {
+        "key": key,
+        "label": field["label"],
+        "help": field.get("help", ""),
+        "type": field["type"],
+        "choices": field.get("choices", []),
+        "required": field.get("required", False),
+        "value": value,
+        "checked": checked,
+        "is_set": is_set,
+    }
+
+
+def _config_sections(use_env_prefill: bool = False) -> list[dict]:
+    sections = []
+    for name in SECTIONS:
+        fields = [
+            _config_field_view(f, use_env_prefill)
+            for f in CONFIG_SCHEMA
+            if f["section"] == name
+        ]
+        sections.append({"name": name, "fields": fields})
+    return sections
+
+
+def _all_present_keys() -> str:
+    return ",".join(f["key"] for f in CONFIG_SCHEMA)
+
+
+def _collect_submitted() -> dict:
+    """Collect submitted config values, scoped to the keys the form declared."""
+    valid = {f["key"]: f for f in CONFIG_SCHEMA}
+    present = [
+        k.strip()
+        for k in (request.form.get("present_keys") or "").split(",")
+        if k.strip() in valid
+    ]
+    out: dict = {}
+    for key in present:
+        if valid[key]["type"] == "bool":
+            out[key] = "on" if request.form.get(key) else ""
+        else:
+            out[key] = request.form.get(key, "")
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Authentication
+# ---------------------------------------------------------------------------
+@app.route("/login", methods=["GET", "POST"])
+@limiter.limit("15 per minute")
+def login():
+    if not is_setup_complete():
+        return redirect(url_for("setup"))
+    if session.get("authenticated"):
+        return redirect(url_for("index"))
+    if request.method == "POST":
+        username = request.form.get("username", "")
+        password = request.form.get("password", "")
+        if verify_admin(username, password):
+            session["authenticated"] = True
+            APP_LOGGER.info("Admin login succeeded for username=%s", username)
+            nxt = request.args.get("next") or request.form.get("next") or ""
+            if not (nxt.startswith("/") and not nxt.startswith("//")):
+                nxt = url_for("index")
+            return redirect(nxt)
+        APP_LOGGER.warning("Failed login attempt for username=%s from %s", username, get_real_ip())
+        flash("Invalid username or password.", "error")
+    return render_template(
+        "login.html",
+        page_title="Sign In",
+        next=request.args.get("next", ""),
+        messages=get_flashed_messages(with_categories=True),
+        current_year=time.strftime("%Y"),
+    )
+
+
+@app.route("/logout", methods=["GET", "POST"])
+def logout():
+    session.clear()
+    flash("Signed out.", "success")
+    return redirect(url_for("login"))
+
+
+# ---------------------------------------------------------------------------
+# First-run onboarding wizard
+# ---------------------------------------------------------------------------
+@app.route("/setup", methods=["GET", "POST"])
+def setup():
+    if is_setup_complete():
+        return redirect(url_for("index") if session.get("authenticated") else url_for("login"))
+
+    if request.method == "POST":
+        username = (request.form.get("admin_username") or "").strip()
+        password = request.form.get("admin_password") or ""
+        confirm = request.form.get("admin_password_confirm") or ""
+
+        errors: list[str] = []
+        if not username or not password:
+            errors.append("Admin username and password are required.")
+        elif password != confirm:
+            errors.append("Passwords do not match.")
+        elif len(password) < 8:
+            errors.append("Password must be at least 8 characters.")
+
+        errors.extend(save_settings(_collect_submitted()))
+        fm.load_runtime_config()
+
+        missing = validate_required()
+        if missing:
+            errors.append("Please fill in the required fields: " + ", ".join(missing))
+
+        if errors:
+            for err in errors:
+                flash(err, "error")
+            return redirect(url_for("setup"))
+
+        set_admin(username, password)
+        mark_setup_complete(True)
+        fm.load_runtime_config()
+        session["authenticated"] = True
+        APP_LOGGER.info("First-time setup completed; admin account '%s' created.", username)
+        flash("Setup complete. Welcome to Forgotten Movies!", "success")
+        return redirect(url_for("index"))
+
+    return render_template(
+        "setup.html",
+        page_title="Welcome",
+        sections=_config_sections(use_env_prefill=True),
+        present_keys=_all_present_keys(),
+        messages=get_flashed_messages(with_categories=True),
+        current_year=time.strftime("%Y"),
+    )
+
+
+@app.route("/settings/test-connection", methods=["POST"])
+@app.route("/setup/test-connection", methods=["POST"])
+def test_connection():
+    service = (request.form.get("service") or "").lower()
+    if service == "seerr":
+        url = request.form.get("OVERSEERR_URL")
+        key = request.form.get("OVERSEERR_API_KEY") or config_store.get("OVERSEERR_API_KEY")
+        ok, message = test_overseerr_connection(url, key)
+    elif service == "tautulli":
+        url = request.form.get("TAUTULLI_URL")
+        key = request.form.get("TAUTULLI_API_KEY") or config_store.get("TAUTULLI_API_KEY")
+        ok, message = test_tautulli_connection(url, key)
+    else:
+        ok, message = False, "Unknown service."
+    return jsonify({"ok": ok, "success": ok, "message": message}), (200 if ok else 400)
+
+
+# ---------------------------------------------------------------------------
+# Settings
+# ---------------------------------------------------------------------------
 @app.route("/settings", methods=["GET", "POST"])
 def settings():
     if request.method == "POST":
@@ -731,11 +996,72 @@ def settings():
     return render_template(
         "settings.html",
         page_title="Settings",
+        sections=_config_sections(),
+        present_keys=_all_present_keys(),
         scheduler_disabled=is_scheduler_disabled(),
         job_status=get_job_status(),
+        using_custom_template=is_using_custom_email_template(),
         messages=get_flashed_messages(with_categories=True),
         current_year=time.strftime("%Y"),
     )
+
+
+@app.route("/settings/save", methods=["POST"])
+def save_config():
+    errors = save_settings(_collect_submitted())
+    fm.load_runtime_config()
+    if errors:
+        for err in errors:
+            flash(err, "error")
+    else:
+        flash("Settings saved.", "success")
+    return redirect(url_for("settings"))
+
+
+# ---------------------------------------------------------------------------
+# Email template editor
+# ---------------------------------------------------------------------------
+@app.route("/settings/email-template", methods=["GET"])
+def email_template_editor():
+    return render_template(
+        "email_template_editor.html",
+        page_title="Email Template",
+        template_source=get_email_template_source(),
+        default_source=get_default_email_template_source(),
+        variables=EMAIL_TEMPLATE_VARIABLES,
+        using_custom=is_using_custom_email_template(),
+        messages=get_flashed_messages(with_categories=True),
+        current_year=time.strftime("%Y"),
+    )
+
+
+@app.route("/settings/email-template/save", methods=["POST"])
+def save_email_template():
+    source = request.form.get("template_source", "")
+    try:
+        save_email_template_source(source)
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("email_template_editor"))
+    flash("Email template saved.", "success")
+    return redirect(url_for("email_template_editor"))
+
+
+@app.route("/settings/email-template/reset", methods=["POST"])
+def reset_email_template_route():
+    reset_email_template()
+    flash("Reverted to the default email template.", "success")
+    return redirect(url_for("email_template_editor"))
+
+
+@app.route("/settings/email-template/preview", methods=["POST"])
+def preview_email_template():
+    source = request.form.get("template_source") or None
+    try:
+        html = render_email_preview(source)
+        return jsonify({"ok": True, "html": html})
+    except Exception as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
 
 
 @app.route("/settings/update-watch-status", methods=["POST"])
@@ -760,9 +1086,10 @@ def update_watch_status():
 def refresh_unknown_metadata():
     APP_LOGGER.info("Manual action: recent unknown metadata refresh requested")
     def _task():
+        limit = fm.TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT
         updates = refresh_metadata_for_recent_unknowns(
-            limit=TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT,
-            pool_size=max(50, TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT),
+            limit=limit,
+            pool_size=max(50, limit),
         )
         return f"Recent unknown metadata refresh complete: {len(updates)} title(s) updated."
 
@@ -771,6 +1098,49 @@ def refresh_unknown_metadata():
         lambda: _run_with_job_lock("Recent unknown metadata refresh", _task),
     )
     return _json_or_flash(payload)
+
+
+def _test_result(ok: bool, message: str, redirect_endpoint: str = "settings"):
+    """Return a JSON result for fetch callers, or flash + redirect otherwise."""
+    if _request_wants_json():
+        return jsonify({"ok": ok, "success": ok, "message": message}), (200 if ok else 400)
+    flash(message, "success" if ok else "error")
+    return redirect(url_for(redirect_endpoint))
+
+
+@app.route("/settings/test-email", methods=["POST"])
+def send_test_email():
+    # If email-section fields were submitted (settings page or setup wizard),
+    # persist them first so the test uses exactly what the user entered. A blank
+    # secret field (masked password) is preserved by save_settings.
+    email_keys = {f["key"] for f in CONFIG_SCHEMA if f["section"] == "Email"}
+    submitted = {k: request.form.get(k) for k in email_keys if k in request.form}
+    if submitted:
+        errors = save_settings(submitted)
+        fm.load_runtime_config()
+        if errors:
+            return _test_result(False, "; ".join(errors))
+
+    recipient = (request.form.get("test_email") or "").strip() or (fm.FROM_EMAIL_ADDRESS or "").strip()
+    if not recipient:
+        return _test_result(False, "Enter a destination address or set a From address first.")
+
+    APP_LOGGER.info("Manual action: test email requested for %s", recipient)
+    subject = "Forgotten Movies test email"
+    body = (
+        "<p>This is a test email from Forgotten Movies.</p>"
+        "<p>If you received this, your SMTP settings are working correctly.</p>"
+        f"<p style=\"color:#888; font-size:0.85em;\">Sent from Forgotten Movies v{APP_VERSION}.</p>"
+    )
+    try:
+        actual_recipient = send_email(recipient, subject, body, is_html=True)
+    except Exception as exc:
+        APP_LOGGER.exception("Test email failed: %s", exc)
+        return _test_result(False, f"Test email failed: {exc}")
+
+    if fm.DEBUG_MODE and actual_recipient != recipient:
+        return _test_result(True, f"Debug mode is on: test email redirected to {actual_recipient}.")
+    return _test_result(True, f"Test email sent to {actual_recipient}.")
 
 
 @app.route("/settings/log-seerr-payload", methods=["POST"])
