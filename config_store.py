@@ -193,6 +193,9 @@ def _coerce(field: dict, value):
         return text if text in field.get("choices", []) else schema_default(field["key"])
     # text / secret / url / email
     text = str(value).strip()
+    if ftype == "url":
+        # Trailing slashes double up when endpoints are appended (".../api/v1//request").
+        text = text.rstrip("/")
     return text
 
 

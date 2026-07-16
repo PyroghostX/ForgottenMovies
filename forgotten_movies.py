@@ -1290,6 +1290,27 @@ def refresh_metadata_for_recent_unknowns(limit: int = 10, pool_size: int = 50) -
         rec.pop("_media_dt", None)
     return updates
 
+def _seerr_results(response) -> list:
+    """Extract 'results' from a Seerr /request response.
+
+    A 200 with an HTML body (SSO login page, wrong URL, wrong app) would
+    otherwise surface as a bare JSONDecodeError, so describe what came back.
+    """
+    try:
+        data = response.json()
+    except ValueError:
+        content_type = response.headers.get("Content-Type", "unknown")
+        snippet = (response.text or "").strip()[:120] or "<empty body>"
+        hint = "" if "/api/v1" in response.url else " Hint: the Seerr URL should point at the /api/v1 root."
+        raise ValueError(
+            f"Seerr returned a non-JSON response (HTTP {response.status_code}, "
+            f"Content-Type: {content_type}): {snippet!r}.{hint}"
+        ) from None
+    if not isinstance(data, dict) or "results" not in data:
+        raise ValueError(f"Seerr returned JSON without a 'results' field: {str(data)[:120]!r}")
+    return data["results"]
+
+
 # Fetch r requests. Env var names keep OVERSEERR for backward compatibility.
 def get_overseerr_requests():
     response = requests.get(
@@ -1298,7 +1319,7 @@ def get_overseerr_requests():
         headers={"X-Api-Key": OVERSEERR_API_KEY},
     )
     response.raise_for_status()
-    return response.json()['results']
+    return _seerr_results(response)
 
 
 def get_overseerr_requests_page(skip: int, take: int):
@@ -1308,7 +1329,7 @@ def get_overseerr_requests_page(skip: int, take: int):
         headers={"X-Api-Key": OVERSEERR_API_KEY},
     )
     response.raise_for_status()
-    return response.json()['results']
+    return _seerr_results(response)
 
 def _check_overseerr_connection(timeout=(5, 15)) -> bool:
     if not OVERSEERR_URL or not OVERSEERR_API_KEY:
@@ -1320,8 +1341,12 @@ def _check_overseerr_connection(timeout=(5, 15)) -> bool:
     try:
         resp = requests.get(test_url, params=params, headers=headers, timeout=timeout)
         resp.raise_for_status()
+        _seerr_results(resp)
         return True
     except requests.RequestException as exc:
+        logger.error("SEERR CONNECTION FAILED: %s", exc)
+        return False
+    except ValueError as exc:
         logger.error("SEERR CONNECTION FAILED: %s", exc)
         return False
 
@@ -1359,8 +1384,11 @@ def test_overseerr_connection(url: str, api_key: str, timeout=(5, 10)) -> tuple[
             timeout=timeout,
         )
         resp.raise_for_status()
+        _seerr_results(resp)
         return True, "Connected to Seerr successfully."
     except requests.RequestException as exc:
+        return False, f"Seerr connection failed: {exc}"
+    except ValueError as exc:
         return False, f"Seerr connection failed: {exc}"
 
 
