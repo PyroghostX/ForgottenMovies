@@ -5,8 +5,6 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Seerr for r
 
 # Features
 
-- **Guided setup:** A first-run wizard creates your admin login and connects Seerr, Tautulli, and SMTP — with built-in **Test** buttons — so no configuration lives in `docker-compose`.
-- **In-app configuration:** Every setting is editable from the **Settings** page and applies live, no restart required. The dashboard is protected by a username/password login.
 - **Automated reminders:** Periodically scan Seerr, cross-reference Tautulli history, and sends emails via SMTP to the original requester.
 - **Built-in email template editor:** Edit the reminder email in the app with a variable reference, live preview, and test send — or fall back to the default at any time.
 - **Dashboard:** Kick off manual runs, review the upcoming reminder queue, see recently sent reminders, and manage unsubscribed addresses.
@@ -14,6 +12,7 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Seerr for r
 - **Self-service unsubscribe (optional):** Let users unsubscribe themselves via encrypted links in emails instead of managing the list manually. Works with any reverse proxy setup.
 - **Scheduler toggle:** Temporarily pause automated API calls and emails from the settings page.
 - **Docker ready:** Single-container deployment with persistent TinyDB data, logs, and template files.
+- **Guided setup:** A first-run wizard creates your admin login and connects Seerr, Tautulli, and SMTP — with built-in **Test** buttons.
 
 
 # Prerequisites
@@ -51,10 +50,6 @@ Start the container, then open `http://<host>:8741` in a browser. A setup wizard
 2. **Connect your services** — Seerr, Tautulli, and (optionally) TheMovieDB, each with a **Test** button.
 3. **Configure email** — SMTP settings, with a **Send Test Email** button to confirm delivery before you go live.
 4. **Set your reminder rules** — how old a request must be, how often to remind, and so on.
-
-Everything is stored inside the app's data directory. You can change any of it later under **Settings**, and edit the reminder email itself under **Settings → Email Template** (with live preview and a test send). Changes apply on the next scan — no restart needed.
-
-> **Upgrading from an earlier version?** Your existing `docker-compose` values are read once to pre-fill the wizard, so just review them and click through. After setup completes, the in-app configuration is authoritative and those environment variables are ignored — you can delete the app settings from your compose file (see `docker-compose.yml-example`).
 
 # Configuration
 
