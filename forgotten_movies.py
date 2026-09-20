@@ -2250,7 +2250,7 @@ def get_plex_rows_overview(check_health: bool = False) -> dict:
         "hidden": hidden,
         "last_sync": get_plex_rows_last_sync(),
         "row_title": PLEX_ROW_TITLE,
-        "row_title_example": render_row_title(type("F", (), {"title": "Kenna", "username": "kenna"})()),
+        "row_title_example": render_row_title(type("F", (), {"title": "Alex", "username": "alex"})()),
     }
     if check_health and _plex_rows_configured():
         try:
