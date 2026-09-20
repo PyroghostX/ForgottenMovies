@@ -38,6 +38,46 @@
       return;
     }
 
+    var plexBtn = ev.target.closest(".plex-signin-btn");
+    if (plexBtn) {
+      ev.preventDefault();
+      var row3 = plexBtn.closest(".test-row");
+      var result3 = row3 ? row3.querySelector('.test-result[data-for="connection"]') : null;
+      var popup = window.open("", "_blank");
+      plexBtn.disabled = true;
+      showResult(result3, true, "Opening Plex sign-in…");
+      postForm("/settings/plex-pin/start", null, {})
+        .then(function (res) {
+          if (!res.data.ok) { throw new Error(res.data.message || "Could not start sign-in."); }
+          if (popup) { popup.location = res.data.auth_url; } else { window.location = res.data.auth_url; }
+          showResult(result3, true, "Waiting for you to approve in Plex…");
+          var tries = 0;
+          var poll = function () {
+            tries += 1;
+            fetch("/settings/plex-pin/poll/" + res.data.pin_id, { headers: { "Accept": "application/json", "X-Requested-With": "fetch" } })
+              .then(function (r) { return r.json(); })
+              .then(function (d) {
+                if (d.done) {
+                  showResult(result3, d.ok, d.message || (d.ok ? "Signed in." : "Failed."));
+                  plexBtn.disabled = false;
+                  var tokenField = document.getElementById("f_PLEX_TOKEN");
+                  if (d.ok && tokenField) { tokenField.placeholder = "•••••••• (saved by Plex sign-in)"; }
+                  return;
+                }
+                if (tries < 120) { setTimeout(poll, 2500); } else { showResult(result3, false, "Timed out waiting for Plex."); plexBtn.disabled = false; }
+              })
+              .catch(function () { showResult(result3, false, "Sign-in check failed."); plexBtn.disabled = false; });
+          };
+          setTimeout(poll, 2500);
+        })
+        .catch(function (err) {
+          if (popup) { popup.close(); }
+          showResult(result3, false, err.message || "Request failed.");
+          plexBtn.disabled = false;
+        });
+      return;
+    }
+
     var emailBtn = ev.target.closest(".test-email-btn");
     if (emailBtn) {
       ev.preventDefault();

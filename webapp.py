@@ -101,7 +101,7 @@ PUBLIC_ENDPOINTS = {
 }
 
 # Endpoints reachable during first-run onboarding (before an admin exists).
-SETUP_ENDPOINTS = {"setup", "test_connection", "send_test_email"}
+SETUP_ENDPOINTS = {"setup", "test_connection", "send_test_email", "plex_pin_start", "plex_pin_poll"}
 
 app = Flask(__name__)
 app.secret_key = config_store.get_or_create_flask_secret_key()
@@ -1173,6 +1173,37 @@ def refresh_unknown_metadata():
         lambda: _run_with_job_lock("Recent unknown metadata refresh", _task),
     )
     return _json_or_flash(payload)
+
+
+# ---------------------------------------------------------------------------
+# Plex sign-in (PIN flow). Gives this app its own plex.tv device + token so it
+# never has to touch the server's own token.
+# ---------------------------------------------------------------------------
+@app.route("/settings/plex-pin/start", methods=["POST"])
+@app.route("/setup/plex-pin/start", methods=["POST"])
+def plex_pin_start():
+    from plex_rows import pin_start
+    try:
+        pin = pin_start(config_store.get_or_create_plex_client_id())
+    except Exception as exc:
+        return jsonify({"ok": False, "message": f"Could not start Plex sign-in: {exc}"}), 502
+    return jsonify({"ok": True, "pin_id": pin["id"], "auth_url": pin["auth_url"]})
+
+
+@app.route("/settings/plex-pin/poll/<int:pin_id>", methods=["GET"])
+@app.route("/setup/plex-pin/poll/<int:pin_id>", methods=["GET"])
+def plex_pin_poll(pin_id: int):
+    from plex_rows import pin_poll
+    try:
+        token = pin_poll(config_store.get_or_create_plex_client_id(), pin_id)
+    except Exception as exc:
+        return jsonify({"ok": False, "done": True, "message": f"Plex sign-in failed: {exc}"}), 502
+    if not token:
+        return jsonify({"ok": True, "done": False})
+    config_store.set_plex_token(token)
+    fm.load_runtime_config()
+    APP_LOGGER.info("Plex sign-in complete; token stored for this app's own Plex device.")
+    return jsonify({"ok": True, "done": True, "message": "Signed in to Plex. Token saved; press Test Plex to verify."})
 
 
 # ---------------------------------------------------------------------------

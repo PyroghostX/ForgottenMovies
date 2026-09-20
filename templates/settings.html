@@ -22,31 +22,84 @@
     @media (max-width: 720px) {
         .settings-toast-container { top: 4.75rem; }
     }
+    .settings-layout { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 1.25rem; align-items: start; }
+    .settings-menu { position: sticky; top: 5rem; background: #1d1d1d; border-radius: 8px; padding: 0.75rem 0.5rem; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
+    .settings-menu a { display: block; padding: 0.45rem 0.7rem; border-radius: 6px; color: #c5cae9; text-decoration: none; font-weight: 600; font-size: 0.92rem; }
+    .settings-menu a:hover, .settings-menu a.active { background: #2a2a2a; color: #fff; }
+    .settings-menu .menu-group { margin: 0.6rem 0.7rem 0.25rem; font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: #757575; }
+    .settings-menu .menu-tools { display: flex; gap: 0.4rem; padding: 0.4rem 0.5rem 0; }
+    .settings-menu .menu-tools button { flex: 1; padding: 0.3rem 0.4rem; font-size: 0.78rem; }
+    details.settings-section { margin-bottom: 1rem; scroll-margin-top: 5.5rem; }
+    details.settings-section > summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 1rem; user-select: none; }
+    details.settings-section > summary::-webkit-details-marker { display: none; }
+    details.settings-section > summary h2 { margin: 0; }
+    details.settings-section > summary .chev { transition: transform 0.15s; color: #c5cae9; font-size: 1.1rem; }
+    details.settings-section[open] > summary .chev { transform: rotate(90deg); }
+    details.settings-section > summary .summary-hint { color: #757575; font-size: 0.85rem; font-weight: 400; margin-left: auto; }
+    details.settings-section > .section-body { margin-top: 1rem; }
+    .save-bar { background: #1d1d1d; border: 1px solid #2c2c2c; border-radius: 8px; padding: 1.25rem 1.5rem; display: flex; align-items: center; flex-wrap: wrap; gap: 1rem 1.5rem; margin: 0.5rem 0 3.5rem; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
+    .save-bar .help-text { margin: 0; }
+    .settings-content .admin-heading { margin: 0 0 0.75rem; font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; color: #757575; }
+    @media (max-width: 900px) {
+        .settings-layout { grid-template-columns: 1fr; }
+        .settings-menu { position: static; display: flex; flex-wrap: wrap; gap: 0.25rem; }
+        .settings-menu .menu-group { display: none; }
+        .settings-menu .menu-tools { width: 100%; }
+    }
 </style>
 {% endblock %}
 
 {% block content %}
+{% macro section_start(id, title, hint='') -%}
+<details class="card settings-section" id="sec-{{ id }}" data-section="{{ id }}">
+    <summary><h2>{{ title }}</h2>{% if hint %}<span class="summary-hint">{{ hint }}</span>{% endif %}<span class="chev">&#9656;</span></summary>
+    <div class="section-body">
+{%- endmacro %}
+{% macro section_end() -%}
+    </div>
+</details>
+{%- endmacro %}
+
+<div class="settings-layout">
+<nav class="settings-menu" aria-label="Settings sections">
+    <div class="menu-group">Configuration</div>
+    {% for section in sections %}
+    <a href="#sec-{{ section.name|lower|replace(' ', '-') }}" data-target="{{ section.name|lower|replace(' ', '-') }}">{{ section.name }}</a>
+    {% endfor %}
+    <div class="menu-group">Admin</div>
+    <a href="#sec-account" data-target="account">Account &amp; Security</a>
+    <a href="#sec-email-template" data-target="email-template">Email Template</a>
+    <a href="#sec-scheduler" data-target="scheduler">Scheduler</a>
+    <a href="#sec-actions" data-target="actions">Actions</a>
+    <a href="#sec-seerr-diagnostics" data-target="seerr-diagnostics">Seerr Diagnostics</a>
+    <a href="{{ url_for('view_logs') }}">Logs &rarr;</a>
+    <div class="menu-tools">
+        <button type="button" class="secondary-btn" id="expand-all">Expand all</button>
+        <button type="button" class="secondary-btn" id="collapse-all">Collapse all</button>
+    </div>
+</nav>
+
+<div class="settings-content">
 <form method="post" action="{{ url_for('save_config') }}" id="config-form">
     <input type="hidden" name="present_keys" value="{{ present_keys }}">
     {% for section in sections %}
-        <div class="card">
-            <h2>{{ section.name }}</h2>
+        {{ section_start(section.name|lower|replace(' ', '-'), section.name, section.fields|length ~ ' settings') }}
             <div class="config-grid">
                 {% for field in section.fields %}
                     {{ render_field(field) }}
                 {% endfor %}
             </div>
             {{ section_tests(section.name) }}
-        </div>
+        {{ section_end() }}
     {% endfor %}
-    <div class="card">
+    <div class="save-bar">
         <button type="submit" style="font-size:1.02rem; padding:0.7rem 1.8rem;">Save Settings</button>
-        <p class="help-text">Changes apply on the next scan or manual action — no restart needed.</p>
+        <p class="help-text">Saves every configuration section above. Changes apply on the next scan or manual action — no restart needed.</p>
     </div>
 </form>
 
-<div class="card">
-    <h2>Account &amp; Security</h2>
+<p class="admin-heading">Admin</p>
+{{ section_start('account', 'Account & Security', 'login ' ~ ('required' if login_required_setting else 'off')) }}
     <form method="post" action="{{ url_for('update_account') }}">
         <label class="toggle-switch">
             <input type="checkbox" name="require_login" {% if login_required_setting %}checked{% endif %}>
@@ -74,20 +127,18 @@
         <p class="help-text" style="margin-top:0;">Leave the password fields blank to keep the current credentials.</p>
         <button type="submit">Save Account Settings</button>
     </form>
-</div>
+{{ section_end() }}
 
-<div class="card">
-    <h2>Email Template</h2>
+{{ section_start('email-template', 'Email Template', 'custom' if using_custom_template else 'default') }}
     <p>Customize the reminder email that recipients receive.</p>
     <p class="help-text">
         Edit the HTML, preview it with sample data, and send yourself a test.
         {% if using_custom_template %}A custom template is currently active.{% else %}Currently using the default template.{% endif %}
     </p>
     <p><a href="{{ url_for('email_template_editor') }}" style="color:#c5cae9; font-weight:700;">Open Email Template Editor</a></p>
-</div>
+{{ section_end() }}
 
-<div class="card">
-    <h2>Scheduler</h2>
+{{ section_start('scheduler', 'Scheduler', 'paused' if scheduler_disabled else 'running') }}
     <p class="help-text">
         Last job:
         {% if job_status.last_started %}
@@ -109,45 +160,37 @@
         </p>
         <button type="submit">Save</button>
     </form>
-</div>
+{{ section_end() }}
 
-<div class="card">
-    <h2>Run Now</h2>
-    <p>Kick off the Forgotten Movies check immediately instead of waiting for the next schedule.</p>
+{{ section_start('actions', 'Actions', 'run now · watch status · metadata') }}
+    <h3>Run Now</h3>
     <p class="help-text">
-        This checks Seerr for new requests, checks Tautulli for unwatched old requests, and sends any eligible reminder emails.
+        Checks Seerr for new requests, checks Tautulli for unwatched old requests, syncs Plex rows, and sends any eligible reminder emails.
     </p>
     <form method="post" action="{{ url_for('run_now') }}" data-async-action data-running-message="Job started. View the logs for details.">
         <input type="hidden" name="next" value="settings">
         <button type="submit">Run Job Now</button>
     </form>
-</div>
 
-<div class="card">
-    <h2>Update Watch Status</h2>
-    <p>Pressing this will check to see if people have watched what we have reminded them on.</p>
+    <h3 style="margin-top:1.5rem;">Update Watch Status</h3>
     <p class="help-text">
-        This checks all unwatched sent emails against Tautulli to see if users have watched the content.
-        This happens automatically during scheduled runs, but you can trigger it manually here.
+        Checks all unwatched sent emails against Tautulli to see if users have watched the content.
+        This happens automatically during scheduled runs.
     </p>
     <form method="post" action="{{ url_for('update_watch_status') }}" data-async-action data-running-message="Watch status check is running. View the logs for details.">
         <button type="submit">Check Watch Status Now</button>
     </form>
-</div>
 
-<div class="card">
-    <h2>Refresh Unknown Metadata</h2>
-    <p>Ask Tautulli to fill in recent requests that still have unknown titles.</p>
+    <h3 style="margin-top:1.5rem;">Refresh Unknown Metadata</h3>
     <p class="help-text">
-        This runs the recent unknown metadata refresh only, using the configured refresh limit.
+        Asks Tautulli to fill in recent requests that still have unknown titles, using the configured refresh limit.
     </p>
     <form method="post" action="{{ url_for('refresh_unknown_metadata') }}" data-async-action data-running-message="Recent unknown metadata refresh is running. View the logs for details.">
         <button type="submit">Refresh Unknown Metadata Now</button>
     </form>
-</div>
+{{ section_end() }}
 
-<div class="card">
-    <h2>Seerr Diagnostics</h2>
+{{ section_start('seerr-diagnostics', 'Seerr Diagnostics') }}
     <p>Log a redacted sample of recent available Seerr request payloads.</p>
     <p class="help-text">
         Use this temporarily to inspect TV season request fields in the Logs page. Email addresses, tokens, and Plex usernames are redacted.
@@ -167,14 +210,8 @@
         >
         <button type="submit">Log Seerr Range</button>
     </form>
+{{ section_end() }}
 </div>
-
-<div class="card">
-    <h2>Logs</h2>
-    <p class="help-text">
-        View recent application logs, change log level, or clear rotated log files.
-    </p>
-    <p><a href="{{ url_for('view_logs') }}" style="color:#c5cae9; font-weight:700;">Open Logs</a></p>
 </div>
 {% endblock %}
 
@@ -252,6 +289,41 @@
                     });
             });
         });
+    })();
+</script>
+<script>
+    (function() {
+        const KEY = "fm.settings.open";
+        const sections = Array.from(document.querySelectorAll("details.settings-section"));
+        const links = Array.from(document.querySelectorAll(".settings-menu a[data-target]"));
+        let open = new Set();
+        try { open = new Set(JSON.parse(localStorage.getItem(KEY) || "[]")); } catch (e) { open = new Set(); }
+        if (open.size === 0 && sections.length) { open.add(sections[0].dataset.section); }
+        const hashTarget = (location.hash || "").replace("#sec-", "");
+        if (hashTarget) { open.add(hashTarget); }
+        function persist() {
+            localStorage.setItem(KEY, JSON.stringify(sections.filter((s) => s.open).map((s) => s.dataset.section)));
+            links.forEach((a) => a.classList.toggle("active", document.getElementById("sec-" + a.dataset.target)?.open === true));
+        }
+        sections.forEach((s) => {
+            s.open = open.has(s.dataset.section);
+            s.addEventListener("toggle", persist);
+        });
+        // A field with a validation error inside a collapsed section would be invisible; open it.
+        document.addEventListener("invalid", (ev) => { const d = ev.target.closest("details"); if (d) { d.open = true; } }, true);
+        links.forEach((a) => a.addEventListener("click", (ev) => {
+            ev.preventDefault();
+            const d = document.getElementById("sec-" + a.dataset.target);
+            if (!d) { return; }
+            sections.forEach((s) => { s.open = (s === d); });
+            history.replaceState(null, "", "#sec-" + a.dataset.target);
+            requestAnimationFrame(() => d.scrollIntoView({ behavior: "smooth", block: "start" }));
+            persist();
+        }));
+        document.getElementById("expand-all")?.addEventListener("click", () => { sections.forEach((s) => s.open = true); persist(); });
+        document.getElementById("collapse-all")?.addEventListener("click", () => { sections.forEach((s) => s.open = false); persist(); });
+        if (hashTarget) { document.getElementById("sec-" + hashTarget)?.scrollIntoView({ block: "start" }); }
+        persist();
     })();
 </script>
 {% endblock %}

@@ -39,9 +39,11 @@
     </div>
   {% elif section_name == 'Plex Rows' %}
     <div class="test-row">
+      <button type="button" class="secondary-btn plex-signin-btn">Sign in with Plex</button>
       <button type="button" class="secondary-btn test-connection-btn" data-service="plex">Test Plex</button>
       <span class="test-result" data-for="connection"></span>
     </div>
+    <p class="help-text">Sign in as the server owner. This creates a "Forgotten Movies" device on your Plex account and stores its token above.</p>
   {% elif section_name == 'Email' %}
     <div class="test-row">
       <input type="email" class="test-email-input" placeholder="Send test to… (blank = From address)"

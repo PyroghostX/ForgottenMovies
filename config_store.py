@@ -52,6 +52,8 @@ _ADMIN_PASSWORD_HASH_KEY = "__admin_password_hash"
 _FLASK_SECRET_KEY = "__flask_secret_key"
 _UNSUBSCRIBE_SECRET_KEY = "__unsubscribe_secret_key"
 _REQUIRE_LOGIN_KEY = "__require_login"
+_PLEX_CLIENT_ID_KEY = "__plex_client_id"
+_PLEX_TOKEN_SOURCE_KEY = "__plex_token_source"   # "pin" (our own sign-in) | "manual"
 
 # In-process read cache, refreshed when the backing file's mtime changes.
 _CACHE_LOCK = threading.RLock()
@@ -148,16 +150,17 @@ CONFIG_SCHEMA: list[dict] = [
      "label": "Plex server URL", "env": "PLEX_URL",
      "help": "Direct URL of the Plex server, e.g. http://192.168.1.10:32400"},
     {"key": "PLEX_TOKEN", "section": "Plex Rows", "type": "secret", "required": False,
-     "label": "Plex admin token", "env": "PLEX_TOKEN",
-     "help": "The server owner's X-Plex-Token. Needed to manage collections and share filters."},
+     "label": "Plex token", "env": "PLEX_TOKEN",
+     "help": "Use 'Sign in with Plex' below as the server owner. Do NOT paste the server's own token "
+             "from Preferences.xml: plex.tv would rewrite the server's device record and users would lose the server."},
     {"key": "PLEX_ROWS_ENABLED", "section": "Plex Rows", "type": "bool", "required": False, "default": False,
      "label": "Show each user their unwatched requests in Plex", "env": "PLEX_ROWS_ENABLED",
      "help": "Keeps a private collection per user, promoted to their Plex Home. "
              "Requires Plex Pass on the admin account and Plex Media Server 1.43.2 or newer."},
     {"key": "PLEX_ROW_TITLE", "section": "Plex Rows", "type": "text", "required": False,
-     "default": "{name}'s Unwatched Requests", "label": "Row title", "env": "PLEX_ROW_TITLE",
-     "help": "Collection/row name. Must include {name} (the user's Plex display name) or {user} (username): "
-             "Plex merges same-named collections within a library, so every user's title has to be unique."},
+     "default": "{name}'s Unwatched Requested {media}", "label": "Row title", "env": "PLEX_ROW_TITLE",
+     "help": "Collection/row name. {name} = first name from the Plex display name (or the username), {user} = username, "
+             "{media} = Movies / TV Shows. Must include {name} or {user}: Plex merges same-named collections within a library."},
     {"key": "PLEX_ROW_LABEL_PREFIX", "section": "Plex Rows", "type": "text", "required": False,
      "default": "req_", "label": "Label prefix", "env": "PLEX_ROW_LABEL_PREFIX",
      "help": "Collections are labelled <prefix><plex username>; other users' share filters exclude that label."},
@@ -312,6 +315,8 @@ def save_settings(submitted: dict, *, keep_blank_secrets: bool = True) -> list[s
     if errors:
         return errors
     if to_write:
+        if "PLEX_TOKEN" in to_write and to_write["PLEX_TOKEN"] != _raw("PLEX_TOKEN"):
+            to_write[_PLEX_TOKEN_SOURCE_KEY] = "manual"
         _write_many(to_write)
     return []
 
@@ -409,6 +414,31 @@ def get_or_create_flask_secret_key() -> str:
     generated = secrets.token_hex(32)
     _write_many({_FLASK_SECRET_KEY: generated})
     return generated
+
+
+def get_or_create_plex_client_id() -> str:
+    """Stable X-Plex-Client-Identifier for this install (our own plex.tv device)."""
+    existing = _raw(_PLEX_CLIENT_ID_KEY)
+    if existing:
+        return existing
+    import uuid
+    generated = f"forgotten-movies-{uuid.uuid4()}"
+    _write_many({_PLEX_CLIENT_ID_KEY: generated})
+    return generated
+
+
+def set_plex_token(token: str) -> None:
+    """Store a token obtained through this app's own Plex PIN sign-in."""
+    _write_many({"PLEX_TOKEN": token, _PLEX_TOKEN_SOURCE_KEY: "pin"})
+
+
+def plex_token_is_own(token: str | None) -> bool:
+    """True if ``token`` is the one this app obtained via its own PIN sign-in.
+
+    Such a token is bound to our own plex.tv device, so it can never rewrite
+    the server's device record. Hand-pasted tokens are checked differently.
+    """
+    return bool(token) and _raw(_PLEX_TOKEN_SOURCE_KEY) == "pin" and _raw("PLEX_TOKEN") == token
 
 
 def get_or_create_unsubscribe_secret_key() -> str:

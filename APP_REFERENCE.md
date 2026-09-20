@@ -11,7 +11,7 @@ This note is a working map of the app so future changes can start from the right
 - `scheduler_runner.py` starts the recurring job loop. It checks the scheduler-disabled setting before running.
 - `job_runner.py` wraps `forgotten_movies.main()` with a file lock so manual and scheduled jobs do not overlap.
 - `entrypoint.py` starts the web app and scheduler process in the Docker container.
-- `plex_rows.py` is the Plex client for the per-user "Your Unwatched Requests" rows: shared-user list + share filters (plex.tv), label-based exclusions, collection create/label/promote/membership. It knows nothing about requests; `forgotten_movies.sync_plex_rows()` orchestrates it.
+- `plex_rows.py` is the Plex client for the per-user "Unwatched Requested Movies / TV Shows" rows: shared-user list + share filters (plex.tv), label-based exclusions, collection create/label/promote/membership. It knows nothing about requests; `forgotten_movies.sync_plex_rows()` orchestrates it.
 - `templates/` contains the UI and email template.
 - `files/` contains static assets such as logo, screenshots, and favicon files.
 
@@ -58,6 +58,8 @@ Important email fields:
 8. Sends at most one reminder per user per run, respecting cooldowns.
 
 Plex rows technique (verified on PMS 1.43.4): the collection carries label `<prefix><username>`; every other friend's `filterMovies`/`filterTelevision` gets `label!=<that label>`. Filters are written with the legacy endpoint `PUT https://plex.tv/api/users/{userID}?filterMovies=..&filterTelevision=..` because python-plexapi's `updateFriend()` targets `/api/v2/sharings/{id}` which returns 404. `merge_exclusions()` only touches `label!=` entries with our prefix and preserves any other restriction the admin set.
+
+Token safety (incident 2026-09-19): plex.tv binds each token to a device and rewrites that device's name/provides/version from the X-Plex-* headers of every request. Using the PMS's own `PlexOnlineToken` through plexapi turned the server's device record into `provides=controller` and every user lost the server (fixed by restarting PMS). Therefore: the app signs in with the Plex PIN flow (`/settings/plex-pin/start`, `/settings/plex-pin/poll/<id>`) to get a token for its own device (`__plex_client_id`, headers from `plex_headers()`); `PlexRowsClient.token_problem()` checks `devices.xml` with a bare token-only request before any plex.tv call and refuses tokens that map to no listed device (the server token is never listed) or to the server itself; `account` is created lazily after that check.
 
 ## External APIs
 

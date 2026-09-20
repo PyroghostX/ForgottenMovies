@@ -27,6 +27,7 @@ import re
 from dataclasses import dataclass, field
 
 import requests
+import plexapi
 from plexapi.exceptions import NotFound
 from plexapi.myplex import MyPlexAccount
 from plexapi.server import PlexServer
@@ -35,7 +36,103 @@ logger = logging.getLogger("ForgottenMoviesPlexRows")
 
 MIN_PMS_VERSION = (1, 43, 2)
 PLEXTV_USERS_URL = "https://plex.tv/api/users/{user_id}"
-CLIENT_ID = "forgotten-movies"
+PLEXTV_DEVICES_URL = "https://plex.tv/devices.xml"
+PLEXTV_PINS_URL = "https://plex.tv/api/v2/pins"
+PLEX_AUTH_URL = "https://app.plex.tv/auth#?"
+PRODUCT_NAME = "Forgotten Movies"
+
+
+def plex_headers(client_id: str, token: str | None = None) -> dict[str, str]:
+    """Headers that identify *this app* as its own Plex device.
+
+    plex.tv binds every token to a device record and rewrites that record from
+    the X-Plex-* headers of each request. Always present a stable identity so
+    the only record we can ever touch is our own.
+    """
+    headers = {
+        "X-Plex-Client-Identifier": client_id,
+        "X-Plex-Product": PRODUCT_NAME,
+        "X-Plex-Version": "1.0",
+        "X-Plex-Device-Name": PRODUCT_NAME,
+        "X-Plex-Device": "Linux",
+        "X-Plex-Platform": "Linux",
+        "X-Plex-Provides": "controller",
+        "Accept": "application/json",
+    }
+    if token:
+        headers["X-Plex-Token"] = token
+    return headers
+
+
+def configure_plexapi_identity(client_id: str) -> None:
+    """Make python-plexapi send the same device identity as plex_headers()."""
+    plexapi.X_PLEX_IDENTIFIER = client_id
+    plexapi.X_PLEX_PRODUCT = PRODUCT_NAME
+    plexapi.X_PLEX_DEVICE_NAME = PRODUCT_NAME
+    plexapi.X_PLEX_VERSION = "1.0"
+    plexapi.X_PLEX_PLATFORM = "Linux"
+    plexapi.X_PLEX_DEVICE = "Linux"
+    plexapi.X_PLEX_PROVIDES = "controller"
+    plexapi.BASE_HEADERS.update({
+        "X-Plex-Client-Identifier": client_id,
+        "X-Plex-Product": PRODUCT_NAME,
+        "X-Plex-Device-Name": PRODUCT_NAME,
+        "X-Plex-Version": "1.0",
+        "X-Plex-Platform": "Linux",
+        "X-Plex-Device": "Linux",
+        "X-Plex-Provides": "controller",
+    })
+
+
+def token_device(token: str, client_id: str, timeout: int = 15) -> dict | None:
+    """Which plex.tv device does this token belong to? None if not found.
+
+    Sent with the token ONLY: any X-Plex-Product/Provides/Device header on a
+    request would make plex.tv rewrite the token's device record, and this
+    call runs before we know whose token it is.
+    """
+    resp = requests.get(PLEXTV_DEVICES_URL, headers={"X-Plex-Token": token}, timeout=timeout)
+    resp.raise_for_status()
+    import xml.etree.ElementTree as ET
+    for node in ET.fromstring(resp.text).iter("Device"):
+        if node.get("token") == token:
+            return {
+                "name": node.get("name"),
+                "product": node.get("product"),
+                "provides": node.get("provides"),
+                "clientIdentifier": node.get("clientIdentifier"),
+            }
+    return None
+
+
+def pin_start(client_id: str, forward_url: str | None = None, timeout: int = 15) -> dict:
+    """Begin a Plex PIN sign-in. Returns {id, code, auth_url}."""
+    resp = requests.post(
+        PLEXTV_PINS_URL,
+        params={"strong": "true"},
+        headers=plex_headers(client_id),
+        timeout=timeout,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    from urllib.parse import urlencode
+    params = {
+        "clientID": client_id,
+        "code": data["code"],
+        "context[device][product]": PRODUCT_NAME,
+        "context[device][deviceName]": PRODUCT_NAME,
+        "context[device][platform]": "Linux",
+    }
+    if forward_url:
+        params["forwardUrl"] = forward_url
+    return {"id": data["id"], "code": data["code"], "auth_url": PLEX_AUTH_URL + urlencode(params)}
+
+
+def pin_poll(client_id: str, pin_id: int, timeout: int = 15) -> str | None:
+    """Return the auth token once the user has approved the PIN, else None."""
+    resp = requests.get(f"{PLEXTV_PINS_URL}/{pin_id}", headers=plex_headers(client_id), timeout=timeout)
+    resp.raise_for_status()
+    return resp.json().get("authToken") or None
 
 
 def _version_tuple(text: str) -> tuple[int, ...]:
@@ -127,16 +224,67 @@ class RowState:
 # Client
 # ---------------------------------------------------------------------------
 class PlexRowsClient:
-    def __init__(self, url: str, token: str, label_prefix: str = "req_", timeout: int = 30):
+    def __init__(self, url: str, token: str, client_id: str, label_prefix: str = "req_", timeout: int = 30,
+                 trusted_token: bool = False):
         self.url = url.rstrip("/")
         self.token = token
+        self.client_id = client_id
+        self.trusted_token = trusted_token   # obtained via our own PIN sign-in
         self.prefix = label_prefix
         self.timeout = timeout
+        configure_plexapi_identity(client_id)
+        # Local server only; nothing below talks to plex.tv until the token
+        # has passed token_problem() (see account property).
         self.server = PlexServer(self.url, self.token, timeout=timeout)
-        self.account = MyPlexAccount(token=self.token, timeout=timeout)
         self.machine_id = self.server.machineIdentifier
+        self._account: MyPlexAccount | None = None
+        self._token_checked = False
         self._friends: list[Friend] | None = None
         self._sections: dict[int, object] = {}
+
+    @property
+    def account(self) -> MyPlexAccount:
+        """plex.tv account object; refuses to exist for a token we can't vouch for."""
+        if self._account is None:
+            problem = self.token_problem()
+            if problem:
+                raise RuntimeError(problem)
+            self._account = MyPlexAccount(token=self.token, timeout=self.timeout)
+        return self._account
+
+    def _plextv_headers(self) -> dict[str, str]:
+        problem = self.token_problem()
+        if problem:
+            raise RuntimeError(problem)
+        return plex_headers(self.client_id, self.token)
+
+    def token_problem(self) -> str | None:
+        """Why the configured token must not be used against plex.tv, or None.
+
+        plex.tv rewrites the device a token belongs to from our request
+        headers. The server's own token (Preferences.xml) is bound to the
+        server's device record and is NOT listed in devices.xml, so a token we
+        cannot map to a listed device is refused: using it once turned the
+        server record into provides=controller and every user lost the server.
+        """
+        if self._token_checked or self.trusted_token:
+            return None
+        device = token_device(self.token, self.client_id, timeout=self.timeout)
+        if device is None:
+            return (
+                "This token does not belong to any device listed on your Plex account, so it is "
+                "almost certainly the Plex server's own token. Using it would rewrite the server's "
+                "plex.tv device record and every user would lose the server. Use 'Sign in with Plex'."
+            )
+        if device.get("clientIdentifier") == self.machine_id or "server" in (device.get("provides") or ""):
+            return "This token belongs to the Plex server itself and must not be used. Use 'Sign in with Plex'."
+        if device.get("clientIdentifier") != self.client_id:
+            logger.warning(
+                "Plex token belongs to device %r (%s), not to this app; consider 'Sign in with Plex'.",
+                device.get("name"), device.get("product"),
+            )
+        self._token_checked = True
+        return None
 
     # -- diagnostics ---------------------------------------------------------
     def describe(self) -> dict:
@@ -159,7 +307,7 @@ class PlexRowsClient:
         # server, their per-user filters, and which libraries they get.
         resp = requests.get(
             f"https://plex.tv/api/servers/{self.machine_id}/shared_servers",
-            headers={"X-Plex-Token": self.token, "X-Plex-Client-Identifier": CLIENT_ID},
+            headers={**self._plextv_headers(), "Accept": "application/xml"},
             timeout=self.timeout,
         )
         resp.raise_for_status()
@@ -191,7 +339,7 @@ class PlexRowsClient:
         resp = requests.put(
             PLEXTV_USERS_URL.format(user_id=friend.id),
             params={"filterMovies": movies, "filterTelevision": television},
-            headers={"X-Plex-Token": self.token, "X-Plex-Client-Identifier": CLIENT_ID},
+            headers={**self._plextv_headers(), "Accept": "application/xml"},
             timeout=self.timeout,
         )
         resp.raise_for_status()

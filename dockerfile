@@ -40,7 +40,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8741/health', timeout=4).status==200 else 1)"
 
 LABEL org.opencontainers.image.title="Forgotten Movies" \
-      org.opencontainers.image.version="0.7.0" \
+      org.opencontainers.image.version="0.7.1" \
       org.opencontainers.image.source="https://github.com/PyroghostX/ForgottenMovies"
 
 # The entrypoint drops privileges to PUID/PGID, then runs the CMD.

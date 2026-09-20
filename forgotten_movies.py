@@ -20,7 +20,7 @@ from jinja2 import Template, TemplateError
 from typing import NamedTuple
 
 # Application version, surfaced in the dashboard footer and the /health response.
-APP_VERSION = "0.7.0"
+APP_VERSION = "0.7.1"
 
 import config_store
 from config_store import is_setup_complete, get_or_create_unsubscribe_secret_key
@@ -70,7 +70,7 @@ UNSUBSCRIBE_ENABLED = False
 PLEX_URL = None
 PLEX_TOKEN = None
 PLEX_ROWS_ENABLED = False
-PLEX_ROW_TITLE = "{name}'s Unwatched Requests"
+PLEX_ROW_TITLE = "{name}'s Unwatched Requested {media}"
 PLEX_ROW_LABEL_PREFIX = "req_"
 PLEX_ROWS_MIN_AGE_DAYS = 0
 PLEX_ROWS_WATCH_CHECK_HOURS = 6
@@ -129,7 +129,7 @@ def load_runtime_config() -> None:
     PLEX_URL = cfg["PLEX_URL"]
     PLEX_TOKEN = cfg["PLEX_TOKEN"]
     PLEX_ROWS_ENABLED = bool(cfg["PLEX_ROWS_ENABLED"])
-    PLEX_ROW_TITLE = cfg["PLEX_ROW_TITLE"] or "{name}'s Unwatched Requests"
+    PLEX_ROW_TITLE = cfg["PLEX_ROW_TITLE"] or "{name}'s Unwatched Requested {media}"
     PLEX_ROW_LABEL_PREFIX = cfg["PLEX_ROW_LABEL_PREFIX"] or "req_"
     PLEX_ROWS_MIN_AGE_DAYS = cfg["PLEX_ROWS_MIN_AGE_DAYS"] or 0
     PLEX_ROWS_WATCH_CHECK_HOURS = cfg["PLEX_ROWS_WATCH_CHECK_HOURS"] or 6
@@ -1911,11 +1911,19 @@ def _plex_rows_configured() -> bool:
     return bool(PLEX_URL and PLEX_TOKEN)
 
 
-def _plex_client():
+def _plex_client(check_token: bool = True):
     from plex_rows import PlexRowsClient
     if not _plex_rows_configured():
         raise RuntimeError("Plex URL and token are not configured.")
-    return PlexRowsClient(PLEX_URL, PLEX_TOKEN, label_prefix=PLEX_ROW_LABEL_PREFIX)
+    client = PlexRowsClient(
+        PLEX_URL, PLEX_TOKEN, config_store.get_or_create_plex_client_id(), label_prefix=PLEX_ROW_LABEL_PREFIX,
+        trusted_token=config_store.plex_token_is_own(PLEX_TOKEN),
+    )
+    if check_token:
+        problem = client.token_problem()
+        if problem:
+            raise RuntimeError(problem)
+    return client
 
 
 def test_plex_connection(url: str, token: str) -> tuple[bool, str]:
@@ -1923,7 +1931,14 @@ def test_plex_connection(url: str, token: str) -> tuple[bool, str]:
     if not url or not token:
         return False, "Plex URL and token are required."
     try:
-        client = PlexRowsClient(url.rstrip("/"), token, label_prefix=PLEX_ROW_LABEL_PREFIX, timeout=10)
+        client = PlexRowsClient(
+            url.rstrip("/"), token, config_store.get_or_create_plex_client_id(),
+            label_prefix=PLEX_ROW_LABEL_PREFIX, timeout=10,
+            trusted_token=config_store.plex_token_is_own(token),
+        )
+        problem = client.token_problem()
+        if problem:
+            return False, problem
         info = client.describe()
     except Exception as exc:
         return False, f"Plex connection failed: {exc}"
@@ -1975,15 +1990,73 @@ def set_request_row_hidden(request_id: int, hidden: bool) -> bool:
     return bool(updated)
 
 
-def render_row_title(friend) -> str:
+def friendly_names(friends) -> dict[str, str]:
+    """Short display name per username, for row titles.
+
+    - A user whose Plex display name is just their username (or blank) is shown
+      by username.
+    - Otherwise use the first name (text before the first space). If two users
+      share a first name, each gets the initial of the next word appended
+      ("Chris B", "Chris M"). If that still collides, the full display name is
+      used, and as a last resort the username is appended.
+    """
+    def _parts(friend) -> list[str]:
+        title = (getattr(friend, "title", "") or "").strip()
+        if not title or title.lower() == friend.username.lower():
+            return []
+        return title.split()
+
+    names: dict[str, str] = {}
+    first_counts: dict[str, int] = {}
+    for f in friends:
+        parts = _parts(f)
+        if parts:
+            first_counts[parts[0].lower()] = first_counts.get(parts[0].lower(), 0) + 1
+    for f in friends:
+        parts = _parts(f)
+        if not parts:
+            names[f.username] = f.username
+        elif first_counts[parts[0].lower()] == 1 or len(parts) == 1:
+            names[f.username] = parts[0]
+        else:
+            names[f.username] = f"{parts[0]} {parts[1][0].upper()}"
+    # Resolve anything still duplicated (same first name + initial, or a first
+    # name that equals someone's username).
+    def _dupes() -> set[str]:
+        seen: dict[str, int] = {}
+        for n in names.values():
+            seen[n.lower()] = seen.get(n.lower(), 0) + 1
+        return {k for k, v in seen.items() if v > 1}
+    dupes = _dupes()
+    if dupes:
+        for f in friends:
+            if names[f.username].lower() in dupes and _parts(f):
+                names[f.username] = " ".join(_parts(f))
+    dupes = _dupes()
+    if dupes:
+        for f in friends:
+            if names[f.username].lower() in dupes:
+                names[f.username] = f"{names[f.username]} ({f.username})"
+    return names
+
+
+MEDIA_WORDS = {"movie": "Movies", "show": "TV Shows"}
+
+
+def render_row_title(friend, friends=None, section_type: str = "movie") -> str:
     """Per-user collection title. Plex merges same-named collections inside a
     library, so the title must differ per user; append the username if the
-    template forgot to."""
-    template = PLEX_ROW_TITLE or "{name}'s Unwatched Requests"
+    template forgot to. {media} becomes "Movies" or "TV Shows"."""
+    template = PLEX_ROW_TITLE or "{name}'s Unwatched Requested {media}"
     if "{name}" not in template and "{user}" not in template:
         template = template.rstrip() + " ({user})"
-    name = getattr(friend, "title", "") or friend.username
-    return template.replace("{name}", name).replace("{user}", friend.username)
+    name = friendly_names(friends or [friend]).get(friend.username, friend.username)
+    media = MEDIA_WORDS.get(section_type, "Requests")
+    return (
+        template.replace("{name}", name)
+        .replace("{user}", friend.username)
+        .replace("{media}", media)
+    )
 
 
 def _row_candidate_records() -> list[dict]:
@@ -2113,7 +2186,7 @@ def sync_plex_rows(force_watch_check: bool = False) -> dict:
     friends_by_name = {f.username: f for f in friends}
     for (section_id, username), members in wanted.items():
         label = client.label_for(username)
-        title = render_row_title(friends_by_name[username])
+        title = render_row_title(friends_by_name[username], friends, section_meta[section_id][1])
         row = plex_rows_db.get((PlexRow.username == username) & (PlexRow.section_id == section_id))
         coll = client.get_collection(row["collection_key"]) if row else None
         if coll is None:
@@ -2250,7 +2323,7 @@ def get_plex_rows_overview(check_health: bool = False) -> dict:
         "hidden": hidden,
         "last_sync": get_plex_rows_last_sync(),
         "row_title": PLEX_ROW_TITLE,
-        "row_title_example": render_row_title(type("F", (), {"title": "Kenna", "username": "kenna"})()),
+        "row_title_example": render_row_title(type("F", (), {"title": "Alex Example", "username": "alex"})(), None, "movie"),
     }
     if check_health and _plex_rows_configured():
         try:
