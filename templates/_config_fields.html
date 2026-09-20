@@ -37,6 +37,11 @@
       <button type="button" class="secondary-btn test-connection-btn" data-service="tautulli">Test Tautulli</button>
       <span class="test-result" data-for="connection"></span>
     </div>
+  {% elif section_name == 'Plex Rows' %}
+    <div class="test-row">
+      <button type="button" class="secondary-btn test-connection-btn" data-service="plex">Test Plex</button>
+      <span class="test-result" data-for="connection"></span>
+    </div>
   {% elif section_name == 'Email' %}
     <div class="test-row">
       <input type="email" class="test-email-input" placeholder="Send test to… (blank = From address)"

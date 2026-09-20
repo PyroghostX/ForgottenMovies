@@ -11,6 +11,7 @@ This note is a working map of the app so future changes can start from the right
 - `scheduler_runner.py` starts the recurring job loop. It checks the scheduler-disabled setting before running.
 - `job_runner.py` wraps `forgotten_movies.main()` with a file lock so manual and scheduled jobs do not overlap.
 - `entrypoint.py` starts the web app and scheduler process in the Docker container.
+- `plex_rows.py` is the Plex client for the per-user "Your Unwatched Requests" rows: shared-user list + share filters (plex.tv), label-based exclusions, collection create/label/promote/membership. It knows nothing about requests; `forgotten_movies.sync_plex_rows()` orchestrates it.
 - `templates/` contains the UI and email template.
 - `files/` contains static assets such as logo, screenshots, and favicon files.
 
@@ -21,14 +22,16 @@ All TinyDB files live in `DATA_DIR`, currently hardcoded as `/app/data`.
 - `request_data.json` via `request_db`: one record per Seerr request the app has seen.
 - `email_data.json` via `email_db`: one record per reminder email that has been sent.
 - `email_users.json` via `email_users_db`: per-email state such as cooldown and unsubscribe status.
-- `settings.json` via `settings_db`: scheduler toggle and last watch-status check timestamp.
+- `settings.json` via `settings_db`: scheduler toggle, last watch-status check timestamp, last Plex-rows watch check and last Plex-rows sync summary.
+- `plex_rows.json` via `plex_rows_db`: one record per (user, library) row: `username`, `section_id`, `section_title`, `section_type`, `collection_key`, `label`, `item_keys`, `updated_at`. Plex is the source of truth; if this file is lost, collections are re-discovered by label on the next sync.
 
 Important request fields:
 
 - `id`: Seerr request id.
 - `mediaAddedDate`/`mediaAddedAt`/`createdAt`: used to decide when a request is old enough for reminders.
 - `tmdbId`, `ratingkey`, `mediaType`: identifiers used for matching media and querying Tautulli.
-- `plexUsername`, `email`: requester identity.
+- `plexUsername`, `plexId`, `email`: requester identity. `plexId` (Seerr `requestedBy.plexId`) is the primary key for matching a Plex friend; username and email are fallbacks.
+- `hide_from_plex_row`: admin chose to keep this request out of the requester's Plex row.
 - `plexUrl`, `mobilePlexUrl`, `posterUrl`: reminder email assets/links.
 - `tautulli_watch_date`: set when Tautulli says the requester already watched the item before a reminder is sent.
 - `email_sent`, `skip_email`, `eligible_for_email`: reminder workflow flags.
@@ -50,8 +53,11 @@ Important email fields:
 3. Pulls fulfilled requests from Seerr with `get_overseerr_requests()`.
 4. Inserts new request records into `request_db`.
 5. Refreshes recent unknown titles using Tautulli via `refresh_metadata_for_recent_unknowns()`.
-6. Groups overdue, unwatched, unsent requests by email.
-7. Sends at most one reminder per user per run, respecting cooldowns.
+6. Syncs the Plex rows (`sync_plex_rows()`), when enabled: runs the requester watch check if `PLEX_ROWS_WATCH_CHECK_HOURS` have passed, resolves every unwatched request to a Plex friend and a live Plex item, writes label exclusions to every friend's share filters (always before creating/promoting anything), then creates/updates/deletes one collection per (library, user). Any collection carrying the label prefix that is no longer wanted is deleted.
+7. Groups overdue, unwatched, unsent requests by email.
+8. Sends at most one reminder per user per run, respecting cooldowns.
+
+Plex rows technique (verified on PMS 1.43.4): the collection carries label `<prefix><username>`; every other friend's `filterMovies`/`filterTelevision` gets `label!=<that label>`. Filters are written with the legacy endpoint `PUT https://plex.tv/api/users/{userID}?filterMovies=..&filterTelevision=..` because python-plexapi's `updateFriend()` targets `/api/v2/sharings/{id}` which returns 404. `merge_exclusions()` only touches `label!=` entries with our prefix and preserves any other restriction the admin set.
 
 ## External APIs
 
@@ -74,6 +80,9 @@ Important email fields:
 - `/logs`, `/logs/data`, `/logs/level`, `/logs/clear`: log viewer and controls.
 - `/settings`: scheduler toggle.
 - `/settings/update-watch-status`: manually checks sent reminders against Tautulli.
+- `/plex-rows`: rows by user from local state; `?health=1` also asks Plex whether every other friend excludes each owner's label.
+- `/plex-rows/sync`, `/plex-rows/remove-all` (needs `confirm=REMOVE`), `/plex-rows/<request_id>/hide` (`hidden=1|0`).
+- `/settings/test-connection` with `service=plex` checks URL/token, PMS version and Plex Pass.
 - `/health`: simple health check.
 
 ## Current Stats Notes
@@ -100,6 +109,7 @@ Per normal job run:
 - Tautulli checks up to 50 recent unknown request records, regardless of due date, but stops after refreshing 10 titles.
 - Tautulli gets 1 history call for each overdue candidate evaluated for sending.
 - Tautulli gets 1 metadata call only when a candidate title is still `Unknown`.
+- Plex rows: 1 plex.tv `shared_servers` call, batched item fetches (50 keys per call), one `collections` listing per movie/show library, plus one plex.tv PUT per friend whose filters changed and the collection edits. Tautulli gets 1 history call per row item every `PLEX_ROWS_WATCH_CHECK_HOURS`.
 
 The stats page itself does not call Tautulli. That keeps page loads fast and avoids surprise API traffic, but it means stats are only as fresh as the locally stored watch state. Accurate all-request stats should be implemented as an explicit refresh action or scheduled background task, not as automatic work during `/stats` rendering.
 

@@ -63,6 +63,11 @@ from forgotten_movies import (
     set_log_level,
     test_overseerr_connection,
     test_tautulli_connection,
+    test_plex_connection,
+    sync_plex_rows,
+    remove_all_plex_rows,
+    get_plex_rows_overview,
+    set_request_row_hidden,
     get_email_template_source,
     get_default_email_template_source,
     is_using_custom_email_template,
@@ -1001,6 +1006,10 @@ def test_connection():
         url = request.form.get("TAUTULLI_URL")
         key = request.form.get("TAUTULLI_API_KEY") or config_store.get("TAUTULLI_API_KEY")
         ok, message = test_tautulli_connection(url, key)
+    elif service == "plex":
+        url = request.form.get("PLEX_URL") or config_store.get("PLEX_URL")
+        key = request.form.get("PLEX_TOKEN") or config_store.get("PLEX_TOKEN")
+        ok, message = test_plex_connection(url, key)
     else:
         ok, message = False, "Unknown service."
     return jsonify({"ok": ok, "success": ok, "message": message}), (200 if ok else 400)
@@ -1164,6 +1173,59 @@ def refresh_unknown_metadata():
         lambda: _run_with_job_lock("Recent unknown metadata refresh", _task),
     )
     return _json_or_flash(payload)
+
+
+# ---------------------------------------------------------------------------
+# Plex rows
+# ---------------------------------------------------------------------------
+@app.route("/plex-rows", methods=["GET"])
+def plex_rows():
+    check_health = request.args.get("health") == "1"
+    return render_template(
+        "plex_rows.html",
+        page_title="Plex Rows",
+        overview=get_plex_rows_overview(check_health=check_health),
+        health_checked=check_health,
+        messages=get_flashed_messages(with_categories=True),
+        current_year=time.strftime("%Y"),
+    )
+
+
+@app.route("/plex-rows/sync", methods=["POST"])
+def plex_rows_sync():
+    APP_LOGGER.info("Manual action: Plex rows sync requested")
+    force = request.form.get("force_watch_check") == "1"
+
+    def _task():
+        summary = sync_plex_rows(force_watch_check=force)
+        return f"Plex rows sync {summary.get('status')}: {summary.get('message')}"
+
+    payload = _start_background_task("Plex rows sync", lambda: _run_with_job_lock("Plex rows sync", _task))
+    return _json_or_flash(payload, redirect_endpoint="plex_rows")
+
+
+@app.route("/plex-rows/remove-all", methods=["POST"])
+def plex_rows_remove_all():
+    if request.form.get("confirm") != "REMOVE":
+        return _json_or_flash({"ok": False, "message": "Type REMOVE to confirm.", "_status": 400}, redirect_endpoint="plex_rows")
+    APP_LOGGER.info("Manual action: remove all Plex rows requested")
+
+    def _task():
+        summary = remove_all_plex_rows()
+        return summary.get("message")
+
+    payload = _start_background_task("Remove all Plex rows", lambda: _run_with_job_lock("Remove all Plex rows", _task))
+    return _json_or_flash(payload, redirect_endpoint="plex_rows")
+
+
+@app.route("/plex-rows/<int:request_id>/hide", methods=["POST"])
+def plex_rows_hide(request_id: int):
+    hidden = request.form.get("hidden", "1") == "1"
+    if set_request_row_hidden(request_id, hidden):
+        flash(("Hidden from" if hidden else "Restored to") + " the user's Plex row. It updates on the next sync.", "success")
+    else:
+        flash("Request not found.", "error")
+    return redirect(url_for("plex_rows"))
 
 
 def _test_result(ok: bool, message: str, redirect_endpoint: str = "settings"):

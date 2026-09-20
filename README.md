@@ -5,6 +5,8 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Seerr for r
 
 # Features
 
+- **Plex Rows**: a private "Your Unwatched Requests" row on each user's Plex Home, kept in sync automatically (see below).
+
 - **Automated reminders:** Periodically scan Seerr, cross-reference Tautulli history, and sends emails via SMTP to the original requester.
 - **Built-in email template editor:** Edit the reminder email in the app with a variable reference, live preview, and test send — or fall back to the default at any time.
 - **Dashboard:** Kick off manual runs, review the upcoming reminder queue, see recently sent reminders, and manage unsubscribed addresses.
@@ -14,6 +16,31 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Seerr for r
 - **Docker ready:** Single-container deployment with persistent TinyDB data, logs, and template files.
 - **Guided setup:** A first-run wizard creates your admin login and connects Seerr, Tautulli, and SMTP — with built-in **Test** buttons.
 
+
+## Plex Rows (optional)
+
+Emails are easy to ignore. With **Plex Rows** enabled, every user also gets a private
+"<name>'s Unwatched Requests" row on their Plex Home screen (and a collection in the library)
+containing the requests they have not watched yet. Items drop off automatically once
+Tautulli sees the requester watch them.
+
+How it works: one collection per user per library (titles must differ per user because
+Plex merges same-named collections within a library), labelled `req_<username>`; every
+*other* shared user's share filters exclude that label, so only the owner can see it.
+The movies and shows themselves stay visible to everyone. The row is promoted to
+"Friends' Home" and moved to the top of the library's rows.
+
+Requirements:
+
+- Plex Pass on the server owner's account.
+- Plex Media Server 1.43.2 or newer (label filtering of collections on Home was fixed there).
+- Users invited as shared users (friends). The server owner cannot be filtered, so the
+  admin sees every row collection in the library's Collections tab.
+
+Set the Plex URL and admin token under *Settings → Plex Rows*, press *Test Plex*, tick the
+enable box and save. Rows sync on every scheduled run and from the *Plex Rows* page, which
+also lets you hide individual items, check that every user's share filters are in place, and
+remove everything (collections and filter entries) in one action.
 
 # Prerequisites
 

@@ -421,6 +421,7 @@
             {% if setup_complete and (authenticated or not auth_required) %}
             <a href="{{ url_for('index') }}">Dashboard</a>
             <a href="{{ url_for('stats') }}">Stats</a>
+            <a href="{{ url_for('plex_rows') }}">Plex Rows</a>
             <a href="{{ url_for('settings') }}">Settings</a>
             {% if authenticated %}<a href="{{ url_for('logout') }}">Logout</a>{% endif %}
             {% endif %}

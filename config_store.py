@@ -65,7 +65,7 @@ _cache_mtime: float | None = None
 # Each field: key, section, label, help, type, default, and flags.
 #   type: "text" | "int" | "bool" | "secret" | "enum" | "url" | "email"
 #   env:  environment variable used ONLY to pre-fill the wizard (migration aid)
-SECTIONS = ["Connections", "Email", "Reminder Rules", "Self-Service", "Debug"]
+SECTIONS = ["Connections", "Email", "Reminder Rules", "Plex Rows", "Self-Service", "Debug"]
 
 CONFIG_SCHEMA: list[dict] = [
     # --- Connections ---
@@ -142,6 +142,31 @@ CONFIG_SCHEMA: list[dict] = [
     {"key": "INITIAL_DELAY_SECONDS", "section": "Reminder Rules", "type": "int", "required": False,
      "default": 600, "label": "Startup delay (seconds)", "env": "INITIAL_DELAY_SECONDS",
      "help": "Grace period after start before the first scan."},
+
+    # --- Plex Rows (per-user "Your Unwatched Requests" collections) ---
+    {"key": "PLEX_URL", "section": "Plex Rows", "type": "url", "required": False,
+     "label": "Plex server URL", "env": "PLEX_URL",
+     "help": "Direct URL of the Plex server, e.g. http://192.168.1.10:32400"},
+    {"key": "PLEX_TOKEN", "section": "Plex Rows", "type": "secret", "required": False,
+     "label": "Plex admin token", "env": "PLEX_TOKEN",
+     "help": "The server owner's X-Plex-Token. Needed to manage collections and share filters."},
+    {"key": "PLEX_ROWS_ENABLED", "section": "Plex Rows", "type": "bool", "required": False, "default": False,
+     "label": "Show each user their unwatched requests in Plex", "env": "PLEX_ROWS_ENABLED",
+     "help": "Keeps a private collection per user, promoted to their Plex Home. "
+             "Requires Plex Pass on the admin account and Plex Media Server 1.43.2 or newer."},
+    {"key": "PLEX_ROW_TITLE", "section": "Plex Rows", "type": "text", "required": False,
+     "default": "{name}'s Unwatched Requests", "label": "Row title", "env": "PLEX_ROW_TITLE",
+     "help": "Collection/row name. Must include {name} (the user's Plex display name) or {user} (username): "
+             "Plex merges same-named collections within a library, so every user's title has to be unique."},
+    {"key": "PLEX_ROW_LABEL_PREFIX", "section": "Plex Rows", "type": "text", "required": False,
+     "default": "req_", "label": "Label prefix", "env": "PLEX_ROW_LABEL_PREFIX",
+     "help": "Collections are labelled <prefix><plex username>; other users' share filters exclude that label."},
+    {"key": "PLEX_ROWS_MIN_AGE_DAYS", "section": "Plex Rows", "type": "int", "required": False, "default": 0,
+     "label": "Days before an item joins the row", "env": "PLEX_ROWS_MIN_AGE_DAYS",
+     "help": "0 = as soon as the request is available."},
+    {"key": "PLEX_ROWS_WATCH_CHECK_HOURS", "section": "Plex Rows", "type": "int", "required": False, "default": 6,
+     "label": "Hours between watch checks", "env": "PLEX_ROWS_WATCH_CHECK_HOURS",
+     "help": "How often Tautulli is asked whether row items have been watched by their requester."},
 
     # --- Self-Service (unsubscribe) ---
     {"key": "BASE_URL", "section": "Self-Service", "type": "url", "required": False,

@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+
+{% block extra_head %}
+<style>
+    .rows-summary { display: flex; flex-wrap: wrap; gap: 1rem 2rem; margin: 0 0 0.5rem; }
+    .rows-summary div { color: #c5cae9; font-size: 0.9rem; }
+    .rows-summary strong { color: #fff; font-size: 1.15rem; display: block; }
+    .status-pill { display: inline-block; padding: 0.1rem 0.55rem; border-radius: 999px; font-size: 0.78rem; font-weight: 700; }
+    .status-ok { background: #1f4d2b; color: #c8f7d4; }
+    .status-bad { background: #5a1f1f; color: #ffb4b4; }
+    .status-unknown { background: #333; color: #ccc; }
+    details.user-row { margin: 0.4rem 0; border: 1px solid #2c2c2c; border-radius: 8px; padding: 0.4rem 0.8rem; }
+    details.user-row summary { cursor: pointer; display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
+    details.user-row summary .name { font-weight: 700; min-width: 12rem; }
+    details.user-row table { width: 100%; margin-top: 0.5rem; }
+    .inline-form { display: inline; }
+    .inline-form button { padding: 0.15rem 0.6rem; font-size: 0.8rem; }
+    .danger-zone { border: 1px solid #5a1f1f; }
+    .danger-zone input { max-width: 200px; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% for category, message in messages %}
+    <div class="message {{ category }}">{{ message }}</div>
+{% endfor %}
+
+<div class="card">
+    <h2>Plex Rows</h2>
+    <p>Each user gets a private collection on their Plex Home with the requests they have not watched yet, titled like "<strong>{{ overview.row_title_example }}</strong>" (template: {{ overview.row_title }}).</p>
+    {% if not overview.configured %}
+        <p class="message warning">Plex URL and token are not set. Configure them under <a href="{{ url_for('settings') }}">Settings → Plex Rows</a>.</p>
+    {% elif not overview.enabled %}
+        <p class="message warning">Plex rows are disabled. Turn them on under <a href="{{ url_for('settings') }}">Settings → Plex Rows</a>.</p>
+    {% endif %}
+    <div class="rows-summary">
+        <div>Users with rows<strong>{{ overview.users|length }}</strong></div>
+        <div>Items in rows<strong>{{ overview.users|sum(attribute='item_count') }}</strong></div>
+        <div>Hidden by admin<strong>{{ overview.hidden|length }}</strong></div>
+        <div>Last sync<strong>
+            {% if overview.last_sync.at %}{{ overview.last_sync.at[:16]|replace('T',' ') }} ({{ overview.last_sync.status }}){% else %}never{% endif %}
+        </strong></div>
+    </div>
+    {% if overview.last_sync.message %}<p class="help-text">{{ overview.last_sync.message }}</p>{% endif %}
+    {% if overview.last_sync.unmatched_users %}
+        <p class="help-text">Requesters with no matching Plex friend (no row made): {{ overview.last_sync.unmatched_users|join(', ') }}</p>
+    {% endif %}
+    <form method="post" action="{{ url_for('plex_rows_sync') }}" data-async-action data-running-message="Plex rows sync is running. View the logs for details." class="inline-form">
+        <button type="submit">Sync Now</button>
+    </form>
+    <form method="post" action="{{ url_for('plex_rows_sync') }}" data-async-action data-running-message="Plex rows sync with a fresh watch check is running." class="inline-form">
+        <input type="hidden" name="force_watch_check" value="1">
+        <button type="submit" class="secondary-btn">Check Watched + Sync</button>
+    </form>
+    <a href="{{ url_for('plex_rows', health=1) }}" class="secondary-btn" style="display:inline-block; text-decoration:none;">Check Share Filters</a>
+    {% if overview.health_error %}<p class="message error">Share filter check failed: {{ overview.health_error }}</p>{% endif %}
+</div>
+
+<div class="card">
+    <h2>Rows by user</h2>
+    {% if not overview.users %}
+        <p class="help-text">No rows yet. Run a sync once Plex rows are enabled.</p>
+    {% endif %}
+    {% for user in overview.users %}
+    <details class="user-row">
+        <summary>
+            <span class="name">{{ user.username }}</span>
+            <span>{{ user.item_count }} item(s) in {{ user.rows|length }} librar{{ 'y' if user.rows|length == 1 else 'ies' }}</span>
+            {% if health_checked %}
+                {% if user.healthy %}<span class="status-pill status-ok">private</span>
+                {% elif user.healthy is none %}<span class="status-pill status-unknown">unchecked</span>
+                {% else %}<span class="status-pill status-bad">filters incomplete</span>{% endif %}
+            {% endif %}
+        </summary>
+        {% for row in user.rows %}
+        <p class="help-text" style="margin-bottom:0;">{{ row.section_title }} · collection {{ row.collection_key }} · label {{ row.label }} · updated {{ row.updated_at[:16]|replace('T',' ') }}</p>
+        <table>
+            <thead><tr><th>Title</th><th>Media</th><th>Added</th><th>Actions</th></tr></thead>
+            <tbody>
+            {% for item in row['items'] %}
+                <tr>
+                    <td>{% if item.plexUrl %}<a href="{{ item.plexUrl }}" target="_blank" rel="noopener">{{ item.title }}</a>{% else %}{{ item.title }}{% endif %}</td>
+                    <td>{{ item.mediaType }}</td>
+                    <td>{{ item.media_added }}</td>
+                    <td>
+                        {% if item.request_id %}
+                        <form method="post" action="{{ url_for('plex_rows_hide', request_id=item.request_id) }}" class="inline-form">
+                            <input type="hidden" name="hidden" value="1">
+                            <button type="submit" class="secondary-btn">Hide from row</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% endfor %}
+    </details>
+    {% endfor %}
+</div>
+
+{% if overview.hidden %}
+<div class="card">
+    <h2>Hidden from rows</h2>
+    <table>
+        <thead><tr><th>Title</th><th>Media</th><th>Plex User</th><th>Actions</th></tr></thead>
+        <tbody>
+        {% for item in overview.hidden %}
+            <tr>
+                <td>{{ item.title }}</td><td>{{ item.mediaType }}</td><td>{{ item.plexUsername }}</td>
+                <td>
+                    <form method="post" action="{{ url_for('plex_rows_hide', request_id=item.request_id) }}" class="inline-form">
+                        <input type="hidden" name="hidden" value="0">
+                        <button type="submit" class="secondary-btn">Restore</button>
+                    </form>
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<div class="card danger-zone">
+    <h2>Remove everything</h2>
+    <p class="help-text">Deletes every row collection and strips the row labels from every user's share filters. Movies and shows are untouched. Type REMOVE to confirm.</p>
+    <form method="post" action="{{ url_for('plex_rows_remove_all') }}" data-async-action data-running-message="Removing all Plex rows.">
+        <input type="text" name="confirm" placeholder="REMOVE" autocomplete="off">
+        <button type="submit">Remove All Rows</button>
+    </form>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    (function() {
+        const forms = Array.from(document.querySelectorAll("form[data-async-action]"));
+        function flash(message, category) {
+            const item = document.createElement("div");
+            item.className = `message ${category || "info"}`;
+            item.textContent = message;
+            document.querySelector(".card").prepend(item);
+            setTimeout(() => item.remove(), 15000);
+        }
+        function pollTask(taskId) {
+            const url = "{{ url_for('settings_task_status', task_id='__TASK_ID__') }}".replace("__TASK_ID__", taskId);
+            const poll = () => fetch(url, { headers: { "Accept": "application/json", "X-Requested-With": "fetch" } })
+                .then((r) => r.json())
+                .then((data) => {
+                    if (data.status === "running") { setTimeout(poll, 2500); return; }
+                    flash(data.message || "Action complete.", data.category || (data.ok ? "success" : "error"));
+                    setTimeout(() => window.location.reload(), 2000);
+                })
+                .catch(() => flash("Unable to read task status. View the logs for details.", "error"));
+            setTimeout(poll, 2500);
+        }
+        forms.forEach((form) => form.addEventListener("submit", (event) => {
+            event.preventDefault();
+            const button = form.querySelector("button[type='submit']");
+            if (button) { button.disabled = true; }
+            fetch(form.action, { method: "POST", body: new FormData(form), headers: { "Accept": "application/json", "X-Requested-With": "fetch" } })
+                .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+                .then(({ ok, data }) => {
+                    flash(data.message || form.dataset.runningMessage || "Action started.", data.category || (ok ? "info" : "error"));
+                    if (data.task_id) { pollTask(data.task_id); }
+                })
+                .catch(() => flash("Unable to start action. View the logs for details.", "error"))
+                .finally(() => { if (button) { button.disabled = false; } });
+        }));
+    })();
+</script>
+{% endblock %}

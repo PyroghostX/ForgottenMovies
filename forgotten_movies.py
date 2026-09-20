@@ -20,7 +20,7 @@ from jinja2 import Template, TemplateError
 from typing import NamedTuple
 
 # Application version, surfaced in the dashboard footer and the /health response.
-APP_VERSION = "0.6.0"
+APP_VERSION = "0.7.0"
 
 import config_store
 from config_store import is_setup_complete, get_or_create_unsubscribe_secret_key
@@ -67,6 +67,13 @@ JOB_INTERVAL_SECONDS = 600
 UNSUBSCRIBE_SECRET_KEY = None
 BASE_URL = None
 UNSUBSCRIBE_ENABLED = False
+PLEX_URL = None
+PLEX_TOKEN = None
+PLEX_ROWS_ENABLED = False
+PLEX_ROW_TITLE = "{name}'s Unwatched Requests"
+PLEX_ROW_LABEL_PREFIX = "req_"
+PLEX_ROWS_MIN_AGE_DAYS = 0
+PLEX_ROWS_WATCH_CHECK_HOURS = 6
 
 
 def load_runtime_config() -> None:
@@ -83,6 +90,8 @@ def load_runtime_config() -> None:
     global DEBUG_MODE, DEBUG_EMAIL, DEBUG_MAX_EMAILS
     global TAUTULLI_NEW_REQUEST_METADATA_LIMIT, TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT
     global JOB_INTERVAL_SECONDS, UNSUBSCRIBE_SECRET_KEY, BASE_URL, UNSUBSCRIBE_ENABLED
+    global PLEX_URL, PLEX_TOKEN, PLEX_ROWS_ENABLED, PLEX_ROW_TITLE, PLEX_ROW_LABEL_PREFIX
+    global PLEX_ROWS_MIN_AGE_DAYS, PLEX_ROWS_WATCH_CHECK_HOURS
 
     cfg = config_store.get_all()
     TAUTULLI_API_KEY = cfg["TAUTULLI_API_KEY"]
@@ -117,6 +126,13 @@ def load_runtime_config() -> None:
     JOB_INTERVAL_SECONDS = cfg["JOB_INTERVAL_SECONDS"] or 600
     base = cfg["BASE_URL"]
     BASE_URL = base.rstrip("/") if base else None
+    PLEX_URL = cfg["PLEX_URL"]
+    PLEX_TOKEN = cfg["PLEX_TOKEN"]
+    PLEX_ROWS_ENABLED = bool(cfg["PLEX_ROWS_ENABLED"])
+    PLEX_ROW_TITLE = cfg["PLEX_ROW_TITLE"] or "{name}'s Unwatched Requests"
+    PLEX_ROW_LABEL_PREFIX = cfg["PLEX_ROW_LABEL_PREFIX"] or "req_"
+    PLEX_ROWS_MIN_AGE_DAYS = cfg["PLEX_ROWS_MIN_AGE_DAYS"] or 0
+    PLEX_ROWS_WATCH_CHECK_HOURS = cfg["PLEX_ROWS_WATCH_CHECK_HOURS"] or 6
     if BASE_URL:
         UNSUBSCRIBE_SECRET_KEY = get_or_create_unsubscribe_secret_key()
         UNSUBSCRIBE_ENABLED = True
@@ -419,6 +435,13 @@ email_users_db = LockedTinyDB(
     TinyDB(os.path.join(DATA_DIR, "email_users.json")),
     os.path.join(DATA_DIR, "email_users.lock"),
 )
+plex_rows_db = LockedTinyDB(
+    TinyDB(os.path.join(DATA_DIR, "plex_rows.json")),
+    os.path.join(DATA_DIR, "plex_rows.lock"),
+)
+PlexRow = Query()
+PLEX_ROWS_LAST_WATCH_CHECK_KEY = "plex_rows_last_watch_check"
+PLEX_ROWS_LAST_SYNC_KEY = "plex_rows_last_sync"
 SETTINGS_DB_PATH = os.path.join(DATA_DIR, "settings.json")
 settings_db = TinyDB(SETTINGS_DB_PATH)
 SETTINGS_LOCK_PATH = os.path.join(DATA_DIR, "settings.lock")
@@ -1881,6 +1904,364 @@ def send_email(to_address, subject, body, is_html=False, unsubscribe_url=None):
     return actual_recipient
 
 # Main logic
+# ---------------------------------------------------------------------------
+# Plex rows: per-user "Your Unwatched Requests" collections
+# ---------------------------------------------------------------------------
+def _plex_rows_configured() -> bool:
+    return bool(PLEX_URL and PLEX_TOKEN)
+
+
+def _plex_client():
+    from plex_rows import PlexRowsClient
+    if not _plex_rows_configured():
+        raise RuntimeError("Plex URL and token are not configured.")
+    return PlexRowsClient(PLEX_URL, PLEX_TOKEN, label_prefix=PLEX_ROW_LABEL_PREFIX)
+
+
+def test_plex_connection(url: str, token: str) -> tuple[bool, str]:
+    from plex_rows import PlexRowsClient, MIN_PMS_VERSION
+    if not url or not token:
+        return False, "Plex URL and token are required."
+    try:
+        client = PlexRowsClient(url.rstrip("/"), token, label_prefix=PLEX_ROW_LABEL_PREFIX, timeout=10)
+        info = client.describe()
+    except Exception as exc:
+        return False, f"Plex connection failed: {exc}"
+    problems = []
+    if not info["version_ok"]:
+        problems.append(f"server {info['version']} is older than {'.'.join(map(str, MIN_PMS_VERSION))}")
+    if not info["plex_pass"]:
+        problems.append("admin account has no active Plex Pass")
+    summary = f"Connected to {info['server']} ({info['version']}), {info['friends']} shared user(s)."
+    if problems:
+        return False, summary + " Not usable for rows: " + "; ".join(problems) + "."
+    return True, summary
+
+
+def get_plex_rows_last_sync() -> dict:
+    record = _with_settings_lock(lambda: settings_db.get(Setting.key == PLEX_ROWS_LAST_SYNC_KEY))
+    return dict(record.get("value") or {}) if record else {}
+
+
+def _set_plex_rows_last_sync(summary: dict) -> None:
+    _with_settings_lock(
+        lambda: settings_db.upsert(
+            {"key": PLEX_ROWS_LAST_SYNC_KEY, "value": summary},
+            Setting.key == PLEX_ROWS_LAST_SYNC_KEY,
+        )
+    )
+
+
+def _plex_rows_watch_check_due() -> bool:
+    record = _with_settings_lock(lambda: settings_db.get(Setting.key == PLEX_ROWS_LAST_WATCH_CHECK_KEY))
+    if not record or not record.get("value"):
+        return True
+    last = _parse_iso(record.get("value"))
+    return datetime.now() - last >= timedelta(hours=PLEX_ROWS_WATCH_CHECK_HOURS)
+
+
+def _mark_plex_rows_watch_check() -> None:
+    _with_settings_lock(
+        lambda: settings_db.upsert(
+            {"key": PLEX_ROWS_LAST_WATCH_CHECK_KEY, "value": datetime.now().isoformat()},
+            Setting.key == PLEX_ROWS_LAST_WATCH_CHECK_KEY,
+        )
+    )
+
+
+def set_request_row_hidden(request_id: int, hidden: bool) -> bool:
+    """Hide (or unhide) one request from its requester's Plex row."""
+    updated = request_db.update({"hide_from_plex_row": bool(hidden)}, Request.id == request_id)
+    return bool(updated)
+
+
+def render_row_title(friend) -> str:
+    """Per-user collection title. Plex merges same-named collections inside a
+    library, so the title must differ per user; append the username if the
+    template forgot to."""
+    template = PLEX_ROW_TITLE or "{name}'s Unwatched Requests"
+    if "{name}" not in template and "{user}" not in template:
+        template = template.rstrip() + " ({user})"
+    name = getattr(friend, "title", "") or friend.username
+    return template.replace("{name}", name).replace("{user}", friend.username)
+
+
+def _row_candidate_records() -> list[dict]:
+    """Request records that belong in a row: fulfilled, requester hasn't watched, not hidden."""
+    threshold = datetime.now() - timedelta(days=PLEX_ROWS_MIN_AGE_DAYS)
+    out = []
+    for rec in request_db.all():
+        if rec.get("tautulli_watch_date") or rec.get("hide_from_plex_row"):
+            continue
+        if not rec.get("ratingkey") or not rec.get("plexUsername"):
+            continue
+        if PLEX_ROWS_MIN_AGE_DAYS > 0:
+            media_dt, _ = _resolve_media_added(rec)
+            if media_dt == datetime.min or media_dt > threshold:
+                continue
+        out.append(rec)
+    return out
+
+
+def check_plex_row_watch_status(records: list[dict] | None = None) -> dict[str, int]:
+    """Ask Tautulli whether each row item has been watched by its requester."""
+    records = records if records is not None else _row_candidate_records()
+    stats = {"checked": 0, "watched": 0, "failed": 0}
+    seen: set[tuple[str, str]] = set()
+    for rec in records:
+        key = (str(rec.get("plexUsername")), str(rec.get("ratingkey")))
+        if key in seen:
+            continue
+        seen.add(key)
+        stats["checked"] += 1
+        try:
+            history = has_user_watched_media(rec["plexUsername"], rec["ratingkey"], rec.get("mediaType"))
+        except Exception as exc:
+            stats["failed"] += 1
+            logger.warning("Row watch check failed for %s (%s): %s", rec.get("title"), rec.get("ratingkey"), exc)
+            continue
+        if history:
+            watched_at = _watch_history_timestamp(history[0])
+            request_db.update(
+                {"tautulli_watch_date": watched_at},
+                (Request.plexUsername == rec["plexUsername"]) & (Request.ratingkey == rec["ratingkey"]),
+            )
+            stats["watched"] += 1
+            logger.info("Row item %s watched by %s on %s; removing from row", rec.get("title"), rec["plexUsername"], watched_at)
+    _mark_plex_rows_watch_check()
+    logger.info("Row watch check: checked=%d watched=%d failed=%d", stats["checked"], stats["watched"], stats["failed"])
+    return stats
+
+
+def _match_friend(friends, rec: dict):
+    plex_id = rec.get("plexId")
+    username = (rec.get("plexUsername") or "").strip().lower()
+    email = (rec.get("email") or "").strip().lower()
+    for f in friends:
+        if plex_id and f.id == int(plex_id):
+            return f
+    for f in friends:
+        if username and f.username.lower() == username:
+            return f
+    for f in friends:
+        if email and f.email.lower() == email:
+            return f
+    return None
+
+
+def sync_plex_rows(force_watch_check: bool = False) -> dict:
+    """Reconcile Plex collections + share filters with the current unwatched requests."""
+    started = datetime.now()
+    summary = {"at": started.isoformat(), "status": "skipped", "message": "", "rows": 0, "items": 0}
+    if not PLEX_ROWS_ENABLED:
+        summary["message"] = "Plex rows are disabled in settings."
+        _set_plex_rows_last_sync(summary)
+        return summary
+    if not _plex_rows_configured():
+        summary.update(status="error", message="Plex URL/token are not configured.")
+        _set_plex_rows_last_sync(summary)
+        return summary
+
+    if force_watch_check or _plex_rows_watch_check_due():
+        check_plex_row_watch_status()
+
+    client = _plex_client()
+    friends = client.friends(refresh=True)
+    records = _row_candidate_records()
+
+    # Resolve every candidate to a friend + a live Plex item, grouped by library.
+    items = client.fetch_items([int(r["ratingkey"]) for r in records if str(r["ratingkey"]).isdigit()])
+    wanted: dict[tuple[int, str], dict[int, object]] = {}
+    section_meta: dict[int, tuple[str, str]] = {}
+    unmatched_users: set[str] = set()
+    missing_items = 0
+    for rec in records:
+        friend = _match_friend(friends, rec)
+        if not friend:
+            unmatched_users.add(rec.get("plexUsername") or rec.get("email") or "?")
+            continue
+        try:
+            item = items.get(int(rec["ratingkey"]))
+        except (TypeError, ValueError):
+            item = None
+        if item is None or item.type not in ("movie", "show"):
+            missing_items += 1
+            continue
+        section_id = int(item.librarySectionID)
+        if friend.section_ids and section_id not in friend.section_ids:
+            continue  # library isn't shared with them; a row there would be invisible anyway
+        section_meta[section_id] = (item.librarySectionTitle, item.type)
+        wanted.setdefault((section_id, friend.username), {})[int(item.ratingKey)] = item
+
+    owners = {username for (_, username) in wanted}
+    # Existing rows we know about (so we can remove emptied ones and keep exclusions for them).
+    known_rows = plex_rows_db.all()
+    owners |= {row["username"] for row in known_rows}
+
+    # 1. Exclusions first, always before any collection is created or promoted.
+    excl = client.ensure_exclusions(owners)
+
+    # 2. Reconcile collections.
+    created = updated = removed = 0
+    seen_row_ids: set[int] = set()
+    # Self-heal: same-titled collections in one library share one membership in
+    # Plex. If any of ours collide, delete them all and let them be recreated.
+    for section_id, coll in client.duplicate_titled_collections():
+        logger.warning("Deleting collection %s '%s' in section %s: title shared with another row", coll.ratingKey, coll.title, section_id)
+        client.delete_collection(coll)
+        removed += 1
+    friends_by_name = {f.username: f for f in friends}
+    for (section_id, username), members in wanted.items():
+        label = client.label_for(username)
+        title = render_row_title(friends_by_name[username])
+        row = plex_rows_db.get((PlexRow.username == username) & (PlexRow.section_id == section_id))
+        coll = client.get_collection(row["collection_key"]) if row else None
+        if coll is None:
+            coll = client.find_collection(section_id, label)
+        expected_type = section_meta[section_id][1]
+        if coll is not None and (int(coll.librarySectionID) != section_id or coll.subtype != expected_type):
+            # Wrong library or wrong media type (e.g. left behind by an older bug): rebuild it.
+            logger.warning(
+                "Plex row collection %s for %s is a %s collection in section %s; expected %s in %s. Recreating.",
+                coll.ratingKey, username, coll.subtype, coll.librarySectionID, expected_type, section_id,
+            )
+            client.delete_collection(coll)
+            coll = None
+        if coll is None:
+            coll = client.create_collection(section_id, title, label, list(members.values()))
+            created += 1
+            logger.info("Created Plex row for %s in %s with %d item(s)", username, section_meta[section_id][0], len(members))
+        else:
+            client.rename_collection(coll, title)
+            added, dropped = client.set_members(coll, members)
+            client.promote(coll)
+            if added or dropped:
+                updated += 1
+                logger.info("Updated Plex row for %s in %s: +%d / -%d", username, section_meta[section_id][0], added, dropped)
+        doc = {
+            "username": username,
+            "section_id": section_id,
+            "section_title": section_meta[section_id][0],
+            "section_type": section_meta[section_id][1],
+            "collection_key": int(coll.ratingKey),
+            "label": label,
+            "item_keys": sorted(members),
+            "updated_at": datetime.now().isoformat(),
+        }
+        if row:
+            plex_rows_db.update(doc, doc_ids=[row.doc_id]); seen_row_ids.add(row.doc_id)
+        else:
+            seen_row_ids.add(plex_rows_db.insert(doc))
+
+    # 3. Anything carrying our label that is not wanted any more (emptied rows,
+    #    orphans from a previous install, manual experiments): delete it.
+    wanted_lower = {(sid, user.lower()) for (sid, user) in wanted}
+    prefix_len = len(PLEX_ROW_LABEL_PREFIX)
+    for section_id, coll in client.find_all_collections():
+        owner = next((l.tag[prefix_len:] for l in coll.labels if l.tag.lower().startswith(PLEX_ROW_LABEL_PREFIX.lower())), "")
+        if (section_id, owner.lower()) in wanted_lower:
+            continue
+        client.delete_collection(coll)
+        removed += 1
+        logger.info("Removed Plex row collection %s (%s) in section %s", coll.ratingKey, owner, section_id)
+    for row in known_rows:
+        if row.doc_id not in seen_row_ids:
+            plex_rows_db.remove(doc_ids=[row.doc_id])
+
+    total_items = sum(len(m) for m in wanted.values())
+    summary.update(
+        status="success",
+        rows=len(wanted),
+        items=total_items,
+        created=created,
+        updated=updated,
+        removed=removed,
+        filters_updated=excl["updated"],
+        filters_failed=excl["failed"],
+        unmatched_users=sorted(unmatched_users),
+        missing_items=missing_items,
+        message=(
+            f"{len(wanted)} row(s), {total_items} item(s); created {created}, updated {updated}, removed {removed}; "
+            f"share filters updated {excl['updated']}, failed {excl['failed']}; "
+            f"{len(unmatched_users)} unmatched user(s), {missing_items} item(s) not found in Plex."
+        ),
+    )
+    if excl["failed"]:
+        summary["status"] = "warning"
+    _set_plex_rows_last_sync(summary)
+    logger.info("Plex rows sync: %s", summary["message"])
+    return summary
+
+
+def remove_all_plex_rows() -> dict:
+    """Tear everything down: demote + delete our collections, strip our labels from every share filter."""
+    if not _plex_rows_configured():
+        raise RuntimeError("Plex URL/token are not configured.")
+    client = _plex_client()
+    deleted = 0
+    for _, coll in client.find_all_collections():
+        client.delete_collection(coll)
+        deleted += 1
+    cleared = client.clear_all_exclusions()
+    plex_rows_db.truncate()
+    summary = {
+        "at": datetime.now().isoformat(),
+        "status": "success",
+        "rows": 0,
+        "items": 0,
+        "message": f"Removed {deleted} collection(s) and cleared share filters on {cleared} user(s).",
+    }
+    _set_plex_rows_last_sync(summary)
+    logger.info("Plex rows removed: %s", summary["message"])
+    return summary
+
+
+def get_plex_rows_overview(check_health: bool = False) -> dict:
+    """Data for the Plex Rows page, from local state only (no Plex calls unless check_health)."""
+    by_request: dict[str, dict] = {}
+    for rec in request_db.all():
+        by_request[str(rec.get("ratingkey"))] = rec
+    rows = sorted(plex_rows_db.all(), key=lambda r: (r["username"].lower(), r.get("section_title") or ""))
+    users: dict[str, dict] = {}
+    for row in rows:
+        entry = users.setdefault(row["username"], {"username": row["username"], "rows": [], "item_count": 0, "healthy": None})
+        items = []
+        for key in row.get("item_keys", []):
+            rec = by_request.get(str(key), {})
+            items.append({
+                "ratingkey": key,
+                "request_id": rec.get("id"),
+                "title": rec.get("title") or "Unknown",
+                "mediaType": rec.get("mediaType") or row.get("section_type"),
+                "media_added": _date_display(rec.get("mediaAddedDate")),
+                "plexUrl": rec.get("plexUrl"),
+            })
+        entry["rows"].append({**row, "items": items})
+        entry["item_count"] += len(items)
+    hidden = [
+        {"request_id": rec.get("id"), "title": rec.get("title") or "Unknown", "plexUsername": rec.get("plexUsername"),
+         "mediaType": rec.get("mediaType")}
+        for rec in request_db.all() if rec.get("hide_from_plex_row")
+    ]
+    overview = {
+        "enabled": PLEX_ROWS_ENABLED,
+        "configured": _plex_rows_configured(),
+        "users": list(users.values()),
+        "hidden": hidden,
+        "last_sync": get_plex_rows_last_sync(),
+        "row_title": PLEX_ROW_TITLE,
+        "row_title_example": render_row_title(type("F", (), {"title": "Kenna", "username": "kenna"})()),
+    }
+    if check_health and _plex_rows_configured():
+        try:
+            client = _plex_client()
+            for entry in overview["users"]:
+                entry["healthy"] = client.exclusions_healthy(entry["username"])
+        except Exception as exc:
+            overview["health_error"] = str(exc)
+    return overview
+
+
 def main():
     load_runtime_config()
     if not is_setup_complete():
@@ -1939,6 +2320,9 @@ def main():
                 updates["requestAvailableDate"] = request_available_raw
             if requested_seasons and not existing_records[0].get("requestedSeasons"):
                 updates["requestedSeasons"] = requested_seasons
+            requester_plex_id = (request.get('requestedBy') or {}).get('plexId')
+            if requester_plex_id and not existing_records[0].get("plexId"):
+                updates["plexId"] = int(requester_plex_id)
             if updates:
                 request_db.update(updates, Request.id == request_id)
                 seerr_updated_count += 1
@@ -2003,6 +2387,7 @@ def main():
                 'ratingkey': ratingkey,
                 'mediaType': media_type,
                 'plexUsername': requested_by_username,
+                'plexId': (request.get('requestedBy') or {}).get('plexId'),
                 'email': requested_by_email,
                 'plexUrl': plex_url,
                 'mobilePlexUrl': mobile_url,
@@ -2036,7 +2421,14 @@ def main():
         pool_size=max(50, TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT),
     )
 
-    # Step 4: Evaluate reminders per user
+    # Step 4: Keep the per-user Plex rows in sync
+    logger.info("Step 4: Sync Plex request rows")
+    try:
+        sync_plex_rows()
+    except Exception as exc:
+        logger.exception("Plex rows sync failed: %s", exc)
+
+    # Step 5: Evaluate reminders per user
     threshold_dt = datetime.now() - timedelta(days=DAYS_SINCE_REQUEST)
     overdue_by_email: dict[str, list[tuple[datetime, dict]]] = {}
     for rec in request_db.all():
