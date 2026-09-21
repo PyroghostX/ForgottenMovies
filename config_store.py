@@ -158,7 +158,7 @@ CONFIG_SCHEMA: list[dict] = [
      "help": "Keeps a private collection per user, promoted to their Plex Home. "
              "Requires Plex Pass on the admin account and Plex Media Server 1.43.2 or newer."},
     {"key": "PLEX_ROW_TITLE", "section": "Plex Rows", "type": "text", "required": False,
-     "default": "{name}'s Unwatched Requested {media}", "label": "Row title", "env": "PLEX_ROW_TITLE",
+     "default": "{media}: Unwatched Requests - {name}", "label": "Row title", "env": "PLEX_ROW_TITLE",
      "help": "Collection/row name. {name} = first name from the Plex display name (or the username), {user} = username, "
              "{media} = Movies / TV Shows. Must include {name} or {user}: Plex merges same-named collections within a library."},
     {"key": "PLEX_ROW_LABEL_PREFIX", "section": "Plex Rows", "type": "text", "required": False,

@@ -20,7 +20,7 @@ from jinja2 import Template, TemplateError
 from typing import NamedTuple
 
 # Application version, surfaced in the dashboard footer and the /health response.
-APP_VERSION = "0.7.1"
+APP_VERSION = "0.7.2"
 
 import config_store
 from config_store import is_setup_complete, get_or_create_unsubscribe_secret_key
@@ -70,7 +70,7 @@ UNSUBSCRIBE_ENABLED = False
 PLEX_URL = None
 PLEX_TOKEN = None
 PLEX_ROWS_ENABLED = False
-PLEX_ROW_TITLE = "{name}'s Unwatched Requested {media}"
+PLEX_ROW_TITLE = "{media}: Unwatched Requests - {name}"
 PLEX_ROW_LABEL_PREFIX = "req_"
 PLEX_ROWS_MIN_AGE_DAYS = 0
 PLEX_ROWS_WATCH_CHECK_HOURS = 6
@@ -129,7 +129,7 @@ def load_runtime_config() -> None:
     PLEX_URL = cfg["PLEX_URL"]
     PLEX_TOKEN = cfg["PLEX_TOKEN"]
     PLEX_ROWS_ENABLED = bool(cfg["PLEX_ROWS_ENABLED"])
-    PLEX_ROW_TITLE = cfg["PLEX_ROW_TITLE"] or "{name}'s Unwatched Requested {media}"
+    PLEX_ROW_TITLE = cfg["PLEX_ROW_TITLE"] or "{media}: Unwatched Requests - {name}"
     PLEX_ROW_LABEL_PREFIX = cfg["PLEX_ROW_LABEL_PREFIX"] or "req_"
     PLEX_ROWS_MIN_AGE_DAYS = cfg["PLEX_ROWS_MIN_AGE_DAYS"] or 0
     PLEX_ROWS_WATCH_CHECK_HOURS = cfg["PLEX_ROWS_WATCH_CHECK_HOURS"] or 6
@@ -2040,14 +2040,14 @@ def friendly_names(friends) -> dict[str, str]:
     return names
 
 
-MEDIA_WORDS = {"movie": "Movies", "show": "TV Shows"}
+MEDIA_WORDS = {"movie": "Movies", "show": "TV"}
 
 
 def render_row_title(friend, friends=None, section_type: str = "movie") -> str:
     """Per-user collection title. Plex merges same-named collections inside a
     library, so the title must differ per user; append the username if the
-    template forgot to. {media} becomes "Movies" or "TV Shows"."""
-    template = PLEX_ROW_TITLE or "{name}'s Unwatched Requested {media}"
+    template forgot to. {media} becomes "Movies" or "TV"."""
+    template = PLEX_ROW_TITLE or "{media}: Unwatched Requests - {name}"
     if "{name}" not in template and "{user}" not in template:
         template = template.rstrip() + " ({user})"
     name = friendly_names(friends or [friend]).get(friend.username, friend.username)
@@ -2145,6 +2145,7 @@ def sync_plex_rows(force_watch_check: bool = False) -> dict:
     # Resolve every candidate to a friend + a live Plex item, grouped by library.
     items = client.fetch_items([int(r["ratingkey"]) for r in records if str(r["ratingkey"]).isdigit()])
     wanted: dict[tuple[int, str], dict[int, object]] = {}
+    wanted_records: dict[tuple[int, str], dict[int, list]] = {}
     section_meta: dict[int, tuple[str, str]] = {}
     unmatched_users: set[str] = set()
     missing_items = 0
@@ -2165,6 +2166,24 @@ def sync_plex_rows(force_watch_check: bool = False) -> dict:
             continue  # library isn't shared with them; a row there would be invisible anyway
         section_meta[section_id] = (item.librarySectionTitle, item.type)
         wanted.setdefault((section_id, friend.username), {})[int(item.ratingKey)] = item
+        wanted_records.setdefault((section_id, friend.username), {}).setdefault(int(item.ratingKey), []).append(rec)
+
+    # Drop anything the requester has already watched, straight from Plex with
+    # their own token (exact per user; Tautulli lookups by username break when
+    # a user renames their account).
+    friends_by_name = {f.username: f for f in friends}
+    watched_now = 0
+    for (section_id, username), members in list(wanted.items()):
+        seen = client.watched_by(friends_by_name[username], list(members))
+        for key, watched_at in seen.items():
+            members.pop(key, None)
+            for rec in wanted_records.get((section_id, username), {}).get(key, []):
+                if not rec.get("tautulli_watch_date"):
+                    request_db.update({"tautulli_watch_date": watched_at}, doc_ids=[rec.doc_id])
+                    watched_now += 1
+                    logger.info("Row item %s watched by %s on %s; removing from row", rec.get("title"), username, watched_at[:10])
+        if not members:
+            wanted.pop((section_id, username))
 
     owners = {username for (_, username) in wanted}
     # Existing rows we know about (so we can remove emptied ones and keep exclusions for them).
@@ -2183,7 +2202,6 @@ def sync_plex_rows(force_watch_check: bool = False) -> dict:
         logger.warning("Deleting collection %s '%s' in section %s: title shared with another row", coll.ratingKey, coll.title, section_id)
         client.delete_collection(coll)
         removed += 1
-    friends_by_name = {f.username: f for f in friends}
     for (section_id, username), members in wanted.items():
         label = client.label_for(username)
         title = render_row_title(friends_by_name[username], friends, section_meta[section_id][1])
@@ -2249,12 +2267,14 @@ def sync_plex_rows(force_watch_check: bool = False) -> dict:
         created=created,
         updated=updated,
         removed=removed,
+        watched_now=watched_now,
         filters_updated=excl["updated"],
         filters_failed=excl["failed"],
         unmatched_users=sorted(unmatched_users),
         missing_items=missing_items,
         message=(
             f"{len(wanted)} row(s), {total_items} item(s); created {created}, updated {updated}, removed {removed}; "
+            f"{watched_now} newly watched; "
             f"share filters updated {excl['updated']}, failed {excl['failed']}; "
             f"{len(unmatched_users)} unmatched user(s), {missing_items} item(s) not found in Plex."
         ),

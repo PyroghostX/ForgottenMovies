@@ -11,7 +11,7 @@ This note is a working map of the app so future changes can start from the right
 - `scheduler_runner.py` starts the recurring job loop. It checks the scheduler-disabled setting before running.
 - `job_runner.py` wraps `forgotten_movies.main()` with a file lock so manual and scheduled jobs do not overlap.
 - `entrypoint.py` starts the web app and scheduler process in the Docker container.
-- `plex_rows.py` is the Plex client for the per-user "Unwatched Requested Movies / TV Shows" rows: shared-user list + share filters (plex.tv), label-based exclusions, collection create/label/promote/membership. It knows nothing about requests; `forgotten_movies.sync_plex_rows()` orchestrates it.
+- `plex_rows.py` is the Plex client for the per-user "Movies/TV: Unwatched Requests - <name>" rows: shared-user list + share filters (plex.tv), label-based exclusions, collection create/label/promote/membership. It knows nothing about requests; `forgotten_movies.sync_plex_rows()` orchestrates it.
 - `templates/` contains the UI and email template.
 - `files/` contains static assets such as logo, screenshots, and favicon files.
 

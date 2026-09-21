@@ -5,7 +5,7 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Seerr for r
 
 # Features
 
-- **Plex Rows**: a private "<name>'s Unwatched Requested Movies / TV Shows" row on each user's Plex Home, kept in sync automatically (see below).
+- **Plex Rows**: a private "Movies: Unwatched Requests - <name>" / "TV: Unwatched Requests - <name>" row on each user's Plex Home, kept in sync automatically (see below).
 
 - **Automated reminders:** Periodically scan Seerr, cross-reference Tautulli history, and sends emails via SMTP to the original requester.
 - **Built-in email template editor:** Edit the reminder email in the app with a variable reference, live preview, and test send — or fall back to the default at any time.
@@ -20,7 +20,7 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Seerr for r
 ## Plex Rows (optional)
 
 Emails are easy to ignore. With **Plex Rows** enabled, every user also gets a private
-"<name>'s Unwatched Requested Movies" / "... TV Shows" row on their Plex Home screen (and a collection in the library)
+"Movies: Unwatched Requests - <name>" / "TV: Unwatched Requests - <name>" row on their Plex Home screen (and a collection in the library)
 containing the requests they have not watched yet. Items drop off automatically once
 Tautulli sees the requester watch them.
 
