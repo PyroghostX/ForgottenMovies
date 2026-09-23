@@ -20,7 +20,7 @@ from jinja2 import Template, TemplateError
 from typing import NamedTuple
 
 # Application version, surfaced in the dashboard footer and the /health response.
-APP_VERSION = "0.7.2"
+APP_VERSION = "0.7.3"
 
 import config_store
 from config_store import is_setup_complete, get_or_create_unsubscribe_secret_key
@@ -1263,7 +1263,7 @@ def refresh_metadata_for_recent_unknowns(limit: int = 10, pool_size: int = 50) -
     for rec in request_db.all():
         if rec.get("title") not in (None, "", "Unknown"):
             continue
-        if not rec.get("ratingkey"):
+        if not rec.get("ratingkey") or rec.get("title_lookup_failed"):
             continue
         media_dt, _ = _resolve_media_added(rec)
         rec["_media_dt"] = media_dt
@@ -1305,8 +1305,14 @@ def refresh_metadata_for_recent_unknowns(limit: int = 10, pool_size: int = 50) -
             title = metadata.get("title") or rec.get("title") or "Unknown"
             logger.debug("title: %s", title)
         except Exception as exc:
-            logger.warning("Failed to refresh metadata for request %s: %s", request_id, exc)
-            continue
+            # Usually the item is gone from Plex (deleted or replaced). Ask Seerr
+            # instead, and if it can't say either, stop retrying this record.
+            title = get_seerr_title(rec.get("tmdbId"), media_type)
+            if title == "Unknown":
+                request_db.update({'title_lookup_failed': True}, Request.id == request_id)
+                logger.info("No title for request %s (rating key %s): %s. Not retrying.", request_id, rating_key, exc)
+                continue
+            logger.info("Title for request %s from Seerr (%s): %s", request_id, exc, title)
         updates[request_id] = title
         request_db.update({'title': title}, Request.id == request_id)
     for rec in candidates:
@@ -1387,7 +1393,7 @@ def _check_tautulli_connection(timeout=(5, 15)) -> bool:
             return False
         return True
     except requests.RequestException as exc:
-        logger.error("TAUTULLI CONNECTION FAILED: %s", exc)
+        logger.error("TAUTULLI CONNECTION FAILED: %s", str(exc).replace(TAUTULLI_API_KEY, "***"))
         return False
     except ValueError as exc:
         logger.error("TAUTULLI CONNECTION FAILED: invalid JSON response (%s)", exc)
@@ -1458,57 +1464,58 @@ def get_tmdb_poster(tmdb_id, media_type):
     return f"https://image.tmdb.org/t/p/w500{data.get('poster_path', '')}" if data.get("poster_path") else ""
 
 # Check Tautulli watch history for a specific user and media
+def _tautulli_get(cmd: str, **params):
+    """Call the Tautulli API and return response.data.
+
+    Errors carry Tautulli's own message instead of the request URL, so the API
+    key never ends up in the logs.
+    """
+    try:
+        response = requests.get(TAUTULLI_URL, params={'apikey': TAUTULLI_API_KEY, 'cmd': cmd, **params}, timeout=30)
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Tautulli {cmd} failed: {type(exc).__name__}") from None
+    try:
+        body = response.json().get('response', {})
+    except ValueError:
+        body = {}
+    if response.status_code >= 400 or body.get('result') not in (None, 'success'):
+        raise RuntimeError(f"Tautulli {cmd} failed ({response.status_code}): {body.get('message') or 'no message'}")
+    return body.get('data')
+
+
 def has_user_watched_media(user, rating_key, media_type):
-    params = {
-        'apikey': TAUTULLI_API_KEY,
-        'cmd': 'get_history',
-        'user': user,
-        'length': 1
-    }
-    if media_type == 'tv show':
-        params['grandparent_rating_key'] = rating_key
-    else:
-        params['rating_key'] = rating_key
-    response = requests.get(TAUTULLI_URL, params=params)
-    response.raise_for_status()
-    watch_history = response.json()['response']['data']['data']
+    key_param = 'grandparent_rating_key' if media_type == 'tv show' else 'rating_key'
+    watch_history = _tautulli_get('get_history', user=user, length=1, **{key_param: rating_key})['data']
     if DEBUG_MODE:
         logger.debug("watch_history: %s", watch_history)
-        
     return watch_history
 
 
 def has_media_been_watched(rating_key, media_type):
-    params = {
-        'apikey': TAUTULLI_API_KEY,
-        'cmd': 'get_history',
-        'length': 1
-    }
-    if media_type == 'tv show':
-        params['grandparent_rating_key'] = rating_key
-    else:
-        params['rating_key'] = rating_key
-    response = requests.get(TAUTULLI_URL, params=params)
-    response.raise_for_status()
-    watch_history = response.json()['response']['data']['data']
+    key_param = 'grandparent_rating_key' if media_type == 'tv show' else 'rating_key'
+    watch_history = _tautulli_get('get_history', length=1, **{key_param: rating_key})['data']
     if DEBUG_MODE:
         logger.debug("media_watch_history: %s", watch_history)
-
     return watch_history
 
 
 # Get metadata from Tautulli
 def get_tautulli_metadata(rating_key):
-    # Fetch metadata from Tautulli
-    params = {
-        'apikey': TAUTULLI_API_KEY,
-        'cmd': 'get_metadata',
-        'rating_key': rating_key
-    }
-    response = requests.get(TAUTULLI_URL, params=params)
-    response.raise_for_status()
-    metadata = response.json()['response']['data']
-    return metadata
+    return _tautulli_get('get_metadata', rating_key=rating_key)
+
+
+def get_seerr_title(tmdb_id, media_type) -> str:
+    """Title from Seerr's TMDB lookup; 'Unknown' when Seerr can't say."""
+    if not tmdb_id or not OVERSEERR_URL or not OVERSEERR_API_KEY:
+        return "Unknown"
+    kind = "tv" if media_type == "tv show" else "movie"
+    try:
+        resp = requests.get(f"{OVERSEERR_URL}/{kind}/{tmdb_id}", headers={"X-Api-Key": OVERSEERR_API_KEY}, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+    except (requests.RequestException, ValueError):
+        return "Unknown"
+    return _extract_seer_title({}, data)
 
 EMAIL_USER_DEFAULTS = {
     'last_email_at': None,

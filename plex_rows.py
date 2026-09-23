@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 
 import requests
 import plexapi
@@ -206,6 +207,7 @@ class Friend:
     filter_television: str
     section_ids: set[int] = field(default_factory=set)   # server-local library keys shared with them
     title: str = ""                                       # display name shown in Plex
+    access_token: str = ""                                # their server-scoped token (local server calls only)
 
 
 @dataclass
@@ -328,6 +330,7 @@ class PlexRowsClient:
                 filter_television=node.get("filterTelevision") or "",
                 section_ids=sections,
                 title=display_names.get(int(node.get("userID")), "") or (node.get("username") or ""),
+                access_token=node.get("accessToken") or "",
             ))
         self._friends = friends
         return friends
@@ -386,6 +389,39 @@ class PlexRowsClient:
                 self.set_friend_filters(friend, movies, tv)
                 cleared += 1
         return cleared
+
+    def watched_by(self, friend: Friend, rating_keys: list[int]) -> dict[int, str]:
+        """{ratingKey: lastViewedAt ISO} for the items this friend has watched.
+
+        Asks the local server with the friend's own access token, so it is
+        exact per user and unaffected by username changes. Movies count as
+        watched when viewCount > 0; shows when any episode has been viewed.
+        """
+        if not friend.access_token or not rating_keys:
+            return {}
+        watched: dict[int, str] = {}
+        keys = sorted({int(k) for k in rating_keys})
+        for start in range(0, len(keys), 100):
+            batch = keys[start:start + 100]
+            try:
+                resp = requests.get(
+                    f"{self.url}/library/metadata/{','.join(map(str, batch))}",
+                    headers={"X-Plex-Token": friend.access_token, "Accept": "application/json"},
+                    timeout=self.timeout,
+                )
+                resp.raise_for_status()
+                items = resp.json().get("MediaContainer", {}).get("Metadata", []) or []
+            except Exception as exc:
+                logger.warning("Watch-state lookup failed for %s: %s", friend.username, exc)
+                continue
+            for item in items:
+                seen = int(item.get("viewCount") or 0) > 0 or int(item.get("viewedLeafCount") or 0) > 0
+                if seen:
+                    ts = item.get("lastViewedAt")
+                    watched[int(item["ratingKey"])] = (
+                        datetime.fromtimestamp(int(ts)).isoformat() if ts else datetime.now().isoformat()
+                    )
+        return watched
 
     # -- items / sections ---------------------------------------------------
     def section(self, section_id: int):

@@ -21,8 +21,8 @@ Forgotten Movies keeps Plex requests from gathering dust. It watches Seerr for r
 
 Emails are easy to ignore. With **Plex Rows** enabled, every user also gets a private
 "Movies: Unwatched Requests - <name>" / "TV: Unwatched Requests - <name>" row on their Plex Home screen (and a collection in the library)
-containing the requests they have not watched yet. Items drop off automatically once
-Tautulli sees the requester watch them.
+containing the requests they have not watched yet. Items drop off at the next sync once the
+requester watches them or marks them watched in Plex (for a show, one watched episode is enough).
 
 How it works: one collection per user per library (titles must differ per user because
 Plex merges same-named collections within a library), labelled `req_<username>`; every
