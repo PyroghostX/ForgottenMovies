@@ -20,7 +20,7 @@ from jinja2 import Template, TemplateError
 from typing import NamedTuple
 
 # Application version, surfaced in the dashboard footer and the /health response.
-APP_VERSION = "0.7.3"
+APP_VERSION = "0.7.4"
 
 import config_store
 from config_store import is_setup_complete, get_or_create_unsubscribe_secret_key
@@ -1281,7 +1281,7 @@ def refresh_metadata_for_recent_unknowns(limit: int = 10, pool_size: int = 50) -
             continue
         if plex_username and media_type:
             try:
-                watch_history = has_user_watched_media(plex_username, rating_key, media_type)
+                watched_at = requester_watched_at(rec)
             except Exception as exc:
                 logger.warning(
                     "Failed to check watch history for request %s (%s): %s",
@@ -1289,17 +1289,10 @@ def refresh_metadata_for_recent_unknowns(limit: int = 10, pool_size: int = 50) -
                     plex_username,
                     exc,
                 )
-                watch_history = []
-            if watch_history:
-                title = watch_history[0].get("title", rec.get("title") or "Unknown")
-                watched_at = _watch_history_timestamp(watch_history[0])
-                updates[request_id] = title
-                request_db.update(
-                    {'title': title, 'tautulli_watch_date': watched_at},
-                    Request.id == request_id,
-                )
+                watched_at = None
+            if watched_at:
+                request_db.update({'tautulli_watch_date': watched_at}, Request.id == request_id)
                 _mark_media_watched(rec, watched_at)
-                continue
         try:
             metadata = get_tautulli_metadata(rating_key)
             title = metadata.get("title") or rec.get("title") or "Unknown"
@@ -1504,6 +1497,47 @@ def get_tautulli_metadata(rating_key):
     return _tautulli_get('get_metadata', rating_key=rating_key)
 
 
+def requester_watched_at(rec: dict) -> str | None:
+    """When the requester watched this request after it arrived in Plex, else None.
+
+    A view only counts if it started after the item was added to Plex, and for
+    TV requests with specific seasons only views of those seasons count, so
+    old seasons watched before a new one was requested don't mark it watched.
+    Tautulli only knows real plays; marks-as-watched are picked up by the Plex
+    Rows sync instead.
+    """
+    user, rating_key, media_type = rec.get("plexUsername"), rec.get("ratingkey"), rec.get("mediaType")
+    history = has_user_watched_media(user, rating_key, media_type)
+    if not history:
+        return None
+    seasons = set(rec.get("requestedSeasons") or []) if media_type == "tv show" else set()
+    try:
+        if seasons:
+            children = _tautulli_get('get_children_metadata', rating_key=rating_key, media_type='show') or {}
+            cutoffs = [
+                (child.get("rating_key"), int(child.get("added_at") or 0))
+                for child in children.get("children_list") or []
+                if str(child.get("media_index")).isdigit() and int(child["media_index"]) in seasons
+            ]
+            if not cutoffs:
+                return None
+        else:
+            cutoffs = [(None, int(get_tautulli_metadata(rating_key).get("added_at") or 0))]
+    except Exception as exc:
+        # Item gone from Plex: its added date is unknown, so fall back to any view.
+        logger.debug("No added date for %s (%s): %s", rec.get("title"), rating_key, exc)
+        return _watch_history_timestamp(history[0])
+    latest = None
+    for season_key, added_at in cutoffs:
+        rows = history if season_key is None else (
+            _tautulli_get('get_history', user=user, parent_rating_key=season_key, length=1)['data']
+        )
+        if rows and int(rows[0].get("date") or 0) >= added_at:
+            if latest is None or int(rows[0]["date"]) > int(latest["date"]):
+                latest = rows[0]
+    return _watch_history_timestamp(latest) if latest else None
+
+
 def get_seerr_title(tmdb_id, media_type) -> str:
     """Title from Seerr's TMDB lookup; 'Unknown' when Seerr can't say."""
     if not tmdb_id or not OVERSEERR_URL or not OVERSEERR_API_KEY:
@@ -1673,14 +1707,12 @@ def _attempt_send_request(
         logger.info("Skipping email to %s for %s (%s); address is unsubscribed.", email_value, title, rating_key)
         return SendOutcome(False, False, "Address is unsubscribed; reminder not sent.", title, None, None)
 
-    watch_history = has_user_watched_media(plex_username, rating_key, media_type)
-    if watch_history:
-        watched_title = watch_history[0].get('title', title)
-        watched_at = _watch_history_timestamp(watch_history[0])
+    watched_at = requester_watched_at(record)
+    if watched_at:
         request_db.update({'tautulli_watch_date': watched_at}, Request.id == request_id)
         _mark_media_watched(record, watched_at)
-        logger.info("Marking %s as watched for %s; no reminder sent.", watched_title, email_value)
-        return SendOutcome(False, True, f"{watched_title} already appears watched; reminder not sent.", title, None, None)
+        logger.info("Marking %s as watched for %s; no reminder sent.", title, email_value)
+        return SendOutcome(False, True, f"{title} already appears watched; reminder not sent.", title, None, None)
 
     if title == "Unknown":
         metadata = get_tautulli_metadata(rating_key)
@@ -2095,13 +2127,12 @@ def check_plex_row_watch_status(records: list[dict] | None = None) -> dict[str, 
         seen.add(key)
         stats["checked"] += 1
         try:
-            history = has_user_watched_media(rec["plexUsername"], rec["ratingkey"], rec.get("mediaType"))
+            watched_at = requester_watched_at(rec)
         except Exception as exc:
             stats["failed"] += 1
             logger.warning("Row watch check failed for %s (%s): %s", rec.get("title"), rec.get("ratingkey"), exc)
             continue
-        if history:
-            watched_at = _watch_history_timestamp(history[0])
+        if watched_at:
             request_db.update(
                 {"tautulli_watch_date": watched_at},
                 (Request.plexUsername == rec["plexUsername"]) & (Request.ratingkey == rec["ratingkey"]),
@@ -2181,10 +2212,17 @@ def sync_plex_rows(force_watch_check: bool = False) -> dict:
     friends_by_name = {f.username: f for f in friends}
     watched_now = 0
     for (section_id, username), members in list(wanted.items()):
-        seen = client.watched_by(friends_by_name[username], list(members))
+        recs_by_key = wanted_records.get((section_id, username), {})
+        # Requested seasons per show; a request without seasons means the whole show.
+        seasons = {
+            key: set().union(*(r.get("requestedSeasons") or [] for r in recs))
+            if all(r.get("requestedSeasons") for r in recs) else set()
+            for key, recs in recs_by_key.items()
+        }
+        seen = client.watched_by(friends_by_name[username], {key: seasons.get(key, set()) for key in members})
         for key, watched_at in seen.items():
             members.pop(key, None)
-            for rec in wanted_records.get((section_id, username), {}).get(key, []):
+            for rec in recs_by_key.get(key, []):
                 if not rec.get("tautulli_watch_date"):
                     request_db.update({"tautulli_watch_date": watched_at}, doc_ids=[rec.doc_id])
                     watched_now += 1

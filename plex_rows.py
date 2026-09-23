@@ -390,37 +390,57 @@ class PlexRowsClient:
                 cleared += 1
         return cleared
 
-    def watched_by(self, friend: Friend, rating_keys: list[int]) -> dict[int, str]:
-        """{ratingKey: lastViewedAt ISO} for the items this friend has watched.
+    def watched_by(self, friend: Friend, wanted: dict[int, set[int]]) -> dict[int, str]:
+        """{ratingKey: lastViewedAt ISO} for the items this friend watched after they arrived.
 
-        Asks the local server with the friend's own access token, so it is
-        exact per user and unaffected by username changes. Movies count as
-        watched when viewCount > 0; shows when any episode has been viewed.
+        ``wanted`` maps each rating key to the season numbers that were requested
+        (empty = the whole movie/show). Asks the local server with the friend's
+        own token, so it is exact per user and sees marks-as-watched too. A view
+        only counts when it is newer than the item's (or season's) addedAt, so
+        earlier seasons watched before a new one was requested don't count.
+        Movies count when viewCount > 0; shows/seasons when an episode is watched.
         """
-        if not friend.access_token or not rating_keys:
+        if not friend.access_token or not wanted:
             return {}
+        headers = {"X-Plex-Token": friend.access_token, "Accept": "application/json"}
+
+        def get(path: str) -> list[dict]:
+            resp = requests.get(f"{self.url}{path}", headers=headers, timeout=self.timeout)
+            resp.raise_for_status()
+            return resp.json().get("MediaContainer", {}).get("Metadata", []) or []
+
+        def viewed_after_added(node: dict) -> int:
+            """lastViewedAt if this node was watched after it was added, else 0."""
+            if node.get("type") == "movie":
+                seen = int(node.get("viewCount") or 0) > 0
+            else:
+                seen = int(node.get("viewedLeafCount") or 0) > 0
+            last = int(node.get("lastViewedAt") or 0)
+            return last if seen and last >= int(node.get("addedAt") or 0) else 0
+
         watched: dict[int, str] = {}
-        keys = sorted({int(k) for k in rating_keys})
+        keys = sorted(int(k) for k in wanted)
         for start in range(0, len(keys), 100):
             batch = keys[start:start + 100]
             try:
-                resp = requests.get(
-                    f"{self.url}/library/metadata/{','.join(map(str, batch))}",
-                    headers={"X-Plex-Token": friend.access_token, "Accept": "application/json"},
-                    timeout=self.timeout,
-                )
-                resp.raise_for_status()
-                items = resp.json().get("MediaContainer", {}).get("Metadata", []) or []
+                items = get(f"/library/metadata/{','.join(map(str, batch))}")
             except Exception as exc:
                 logger.warning("Watch-state lookup failed for %s: %s", friend.username, exc)
                 continue
             for item in items:
-                seen = int(item.get("viewCount") or 0) > 0 or int(item.get("viewedLeafCount") or 0) > 0
-                if seen:
-                    ts = item.get("lastViewedAt")
-                    watched[int(item["ratingKey"])] = (
-                        datetime.fromtimestamp(int(ts)).isoformat() if ts else datetime.now().isoformat()
-                    )
+                key = int(item["ratingKey"])
+                seasons = wanted.get(key) or set()
+                if item.get("type") == "show" and seasons:
+                    try:
+                        children = get(f"/library/metadata/{key}/children")
+                    except Exception as exc:
+                        logger.warning("Season watch-state lookup failed for %s (%s): %s", friend.username, key, exc)
+                        continue
+                    last = max((viewed_after_added(c) for c in children if c.get("index") in seasons), default=0)
+                else:
+                    last = viewed_after_added(item)
+                if last:
+                    watched[key] = datetime.fromtimestamp(last).isoformat()
         return watched
 
     # -- items / sections ---------------------------------------------------
