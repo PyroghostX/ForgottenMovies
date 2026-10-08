@@ -20,7 +20,7 @@ from jinja2 import Template, TemplateError
 from typing import NamedTuple
 
 # Application version, surfaced in the dashboard footer and the /health response.
-APP_VERSION = "0.7.4"
+APP_VERSION = "0.7.5"
 
 import config_store
 from config_store import is_setup_complete, get_or_create_unsubscribe_secret_key

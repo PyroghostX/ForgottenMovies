@@ -399,6 +399,8 @@ class PlexRowsClient:
         only counts when it is newer than the item's (or season's) addedAt, so
         earlier seasons watched before a new one was requested don't count.
         Movies count when viewCount > 0; shows/seasons when an episode is watched.
+        Shows are judged by their episodes: for a friend's token Plex gives show
+        and season nodes a viewedLeafCount but no lastViewedAt.
         """
         if not friend.access_token or not wanted:
             return {}
@@ -410,11 +412,8 @@ class PlexRowsClient:
             return resp.json().get("MediaContainer", {}).get("Metadata", []) or []
 
         def viewed_after_added(node: dict) -> int:
-            """lastViewedAt if this node was watched after it was added, else 0."""
-            if node.get("type") == "movie":
-                seen = int(node.get("viewCount") or 0) > 0
-            else:
-                seen = int(node.get("viewedLeafCount") or 0) > 0
+            """lastViewedAt if this movie/episode was watched after it was added, else 0."""
+            seen = int(node.get("viewCount") or 0) > 0
             last = int(node.get("lastViewedAt") or 0)
             return last if seen and last >= int(node.get("addedAt") or 0) else 0
 
@@ -430,13 +429,16 @@ class PlexRowsClient:
             for item in items:
                 key = int(item["ratingKey"])
                 seasons = wanted.get(key) or set()
-                if item.get("type") == "show" and seasons:
-                    try:
-                        children = get(f"/library/metadata/{key}/children")
-                    except Exception as exc:
-                        logger.warning("Season watch-state lookup failed for %s (%s): %s", friend.username, key, exc)
+                if item.get("type") == "show":
+                    if not int(item.get("viewedLeafCount") or 0):
                         continue
-                    last = max((viewed_after_added(c) for c in children if c.get("index") in seasons), default=0)
+                    try:
+                        episodes = get(f"/library/metadata/{key}/allLeaves")
+                    except Exception as exc:
+                        logger.warning("Episode watch-state lookup failed for %s (%s): %s", friend.username, key, exc)
+                        continue
+                    last = max((viewed_after_added(e) for e in episodes
+                                if not seasons or e.get("parentIndex") in seasons), default=0)
                 else:
                     last = viewed_after_added(item)
                 if last:
@@ -547,6 +549,11 @@ class PlexRowsClient:
 
     def delete_collection(self, coll) -> None:
         self.demote(coll)
+        # Empty it first: deleting a collection leaves its tag on the items, and
+        # Plex later re-creates it from that tag with no label (visible to all).
+        members = coll.items()
+        if members:
+            coll.removeItems(members)
         coll.delete()
 
     def rename_collection(self, coll, title: str) -> None:
