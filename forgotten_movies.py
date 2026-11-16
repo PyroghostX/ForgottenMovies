@@ -20,7 +20,7 @@ from jinja2 import Template, TemplateError
 from typing import NamedTuple
 
 # Application version, surfaced in the dashboard footer and the /health response.
-APP_VERSION = "0.7.5"
+APP_VERSION = "0.7.6"
 
 import config_store
 from config_store import is_setup_complete, get_or_create_unsubscribe_secret_key
@@ -74,6 +74,7 @@ PLEX_ROW_TITLE = "{media}: Unwatched Requests - {name}"
 PLEX_ROW_LABEL_PREFIX = "req_"
 PLEX_ROWS_MIN_AGE_DAYS = 0
 PLEX_ROWS_WATCH_CHECK_HOURS = 6
+PLEX_ROWS_WATCHED_GRACE_HOURS = 24
 
 
 def load_runtime_config() -> None:
@@ -91,7 +92,7 @@ def load_runtime_config() -> None:
     global TAUTULLI_NEW_REQUEST_METADATA_LIMIT, TAUTULLI_RECENT_UNKNOWN_METADATA_LIMIT
     global JOB_INTERVAL_SECONDS, UNSUBSCRIBE_SECRET_KEY, BASE_URL, UNSUBSCRIBE_ENABLED
     global PLEX_URL, PLEX_TOKEN, PLEX_ROWS_ENABLED, PLEX_ROW_TITLE, PLEX_ROW_LABEL_PREFIX
-    global PLEX_ROWS_MIN_AGE_DAYS, PLEX_ROWS_WATCH_CHECK_HOURS
+    global PLEX_ROWS_MIN_AGE_DAYS, PLEX_ROWS_WATCH_CHECK_HOURS, PLEX_ROWS_WATCHED_GRACE_HOURS
 
     cfg = config_store.get_all()
     TAUTULLI_API_KEY = cfg["TAUTULLI_API_KEY"]
@@ -133,6 +134,8 @@ def load_runtime_config() -> None:
     PLEX_ROW_LABEL_PREFIX = cfg["PLEX_ROW_LABEL_PREFIX"] or "req_"
     PLEX_ROWS_MIN_AGE_DAYS = cfg["PLEX_ROWS_MIN_AGE_DAYS"] or 0
     PLEX_ROWS_WATCH_CHECK_HOURS = cfg["PLEX_ROWS_WATCH_CHECK_HOURS"] or 6
+    grace = cfg.get("PLEX_ROWS_WATCHED_GRACE_HOURS")
+    PLEX_ROWS_WATCHED_GRACE_HOURS = 24 if grace is None or grace == "" else int(grace)
     if BASE_URL:
         UNSUBSCRIBE_SECRET_KEY = get_or_create_unsubscribe_secret_key()
         UNSUBSCRIBE_ENABLED = True
@@ -1177,7 +1180,7 @@ def check_unwatched_emails_status() -> dict[str, int]:
             continue
 
         try:
-            watch_history = has_user_watched_media(plex_username, rating_key, media_type)
+            watch_history = has_user_watched_media(plex_username, rating_key, media_type, email, rec.get("plexId"))
             if watch_history:
                 watch_record = watch_history[0]
                 watched_at = _watch_history_timestamp(watch_record)
@@ -1476,9 +1479,41 @@ def _tautulli_get(cmd: str, **params):
     return body.get('data')
 
 
-def has_user_watched_media(user, rating_key, media_type):
+_tautulli_users_cache: dict = {"at": datetime.min, "users": []}
+
+
+def _tautulli_user_params(user, email=None, plex_id=None) -> dict:
+    """get_history params naming this Plex account in Tautulli.
+
+    Seerr keeps the username from when the user first signed in, so a user who
+    later renamed their Plex account
+    is not found by ``user=``. Match on the Plex account id, then username,
+    then email, and use Tautulli's user_id; fall back to the name.
+    """
+    if datetime.now() - _tautulli_users_cache["at"] > timedelta(minutes=10):
+        try:
+            _tautulli_users_cache["users"] = _tautulli_get('get_users') or []
+            _tautulli_users_cache["at"] = datetime.now()
+        except Exception as exc:
+            logger.debug("Tautulli get_users failed: %s", exc)
+    users = _tautulli_users_cache["users"]
+    name = (user or "").strip().lower()
+    mail = (email or "").strip().lower()
+    for test in (
+        lambda u: plex_id and str(u.get("user_id")) == str(plex_id),
+        lambda u: name and (u.get("username") or "").lower() == name,
+        lambda u: mail and (u.get("email") or "").lower() == mail,
+    ):
+        for u in users:
+            if test(u):
+                return {"user_id": u["user_id"]}
+    return {"user": user}
+
+
+def has_user_watched_media(user, rating_key, media_type, email=None, plex_id=None):
     key_param = 'grandparent_rating_key' if media_type == 'tv show' else 'rating_key'
-    watch_history = _tautulli_get('get_history', user=user, length=1, **{key_param: rating_key})['data']
+    who = _tautulli_user_params(user, email, plex_id)
+    watch_history = _tautulli_get('get_history', length=1, **who, **{key_param: rating_key})['data']
     if DEBUG_MODE:
         logger.debug("watch_history: %s", watch_history)
     return watch_history
@@ -1507,7 +1542,7 @@ def requester_watched_at(rec: dict) -> str | None:
     Rows sync instead.
     """
     user, rating_key, media_type = rec.get("plexUsername"), rec.get("ratingkey"), rec.get("mediaType")
-    history = has_user_watched_media(user, rating_key, media_type)
+    history = has_user_watched_media(user, rating_key, media_type, rec.get("email"), rec.get("plexId"))
     if not history:
         return None
     seasons = set(rec.get("requestedSeasons") or []) if media_type == "tv show" else set()
@@ -1530,7 +1565,8 @@ def requester_watched_at(rec: dict) -> str | None:
     latest = None
     for season_key, added_at in cutoffs:
         rows = history if season_key is None else (
-            _tautulli_get('get_history', user=user, parent_rating_key=season_key, length=1)['data']
+            _tautulli_get('get_history', **_tautulli_user_params(user, rec.get("email"), rec.get("plexId")),
+                          parent_rating_key=season_key, length=1)['data']
         )
         if rows and int(rows[0].get("date") or 0) >= added_at:
             if latest is None or int(rows[0]["date"]) > int(latest["date"]):
@@ -2098,12 +2134,24 @@ def render_row_title(friend, friends=None, section_type: str = "movie") -> str:
     )
 
 
+def _row_watch_settled(watched_at: str | None) -> bool:
+    """True once a requester's watch is old enough to take the item off their row.
+
+    Any watch counts, even a few minutes; the item stays on the row for
+    PLEX_ROWS_WATCHED_GRACE_HOURS after it so a part-watched movie or show is
+    still easy to find again the same day.
+    """
+    if not watched_at:
+        return False
+    return datetime.now() - _parse_iso(watched_at) >= timedelta(hours=PLEX_ROWS_WATCHED_GRACE_HOURS)
+
+
 def _row_candidate_records() -> list[dict]:
-    """Request records that belong in a row: fulfilled, requester hasn't watched, not hidden."""
+    """Request records that belong in a row: fulfilled, not watched a day ago, not hidden."""
     threshold = datetime.now() - timedelta(days=PLEX_ROWS_MIN_AGE_DAYS)
     out = []
     for rec in request_db.all():
-        if rec.get("tautulli_watch_date") or rec.get("hide_from_plex_row"):
+        if _row_watch_settled(rec.get("tautulli_watch_date")) or rec.get("hide_from_plex_row"):
             continue
         if not rec.get("ratingkey") or not rec.get("plexUsername"):
             continue
@@ -2132,13 +2180,14 @@ def check_plex_row_watch_status(records: list[dict] | None = None) -> dict[str, 
             stats["failed"] += 1
             logger.warning("Row watch check failed for %s (%s): %s", rec.get("title"), rec.get("ratingkey"), exc)
             continue
-        if watched_at:
+        if watched_at and not rec.get("tautulli_watch_date"):
             request_db.update(
                 {"tautulli_watch_date": watched_at},
                 (Request.plexUsername == rec["plexUsername"]) & (Request.ratingkey == rec["ratingkey"]),
             )
             stats["watched"] += 1
-            logger.info("Row item %s watched by %s on %s; removing from row", rec.get("title"), rec["plexUsername"], watched_at)
+            logger.info("Row item %s watched by %s on %s; leaves the row %d h after that",
+                        rec.get("title"), rec["plexUsername"], watched_at, PLEX_ROWS_WATCHED_GRACE_HOURS)
     _mark_plex_rows_watch_check()
     logger.info("Row watch check: checked=%d watched=%d failed=%d", stats["checked"], stats["watched"], stats["failed"])
     return stats
@@ -2221,12 +2270,17 @@ def sync_plex_rows(force_watch_check: bool = False) -> dict:
         }
         seen = client.watched_by(friends_by_name[username], {key: seasons.get(key, set()) for key in members})
         for key, watched_at in seen.items():
-            members.pop(key, None)
+            first_seen = None
             for rec in recs_by_key.get(key, []):
                 if not rec.get("tautulli_watch_date"):
                     request_db.update({"tautulli_watch_date": watched_at}, doc_ids=[rec.doc_id])
+                    rec["tautulli_watch_date"] = watched_at
                     watched_now += 1
-                    logger.info("Row item %s watched by %s on %s; removing from row", rec.get("title"), username, watched_at[:10])
+                    logger.info("Row item %s watched by %s on %s; leaves the row %d h after that",
+                                rec.get("title"), username, watched_at[:16], PLEX_ROWS_WATCHED_GRACE_HOURS)
+                first_seen = min(filter(None, [first_seen, rec.get("tautulli_watch_date")]), key=_parse_iso)
+            if _row_watch_settled(first_seen):
+                members.pop(key, None)
         if not members:
             wanted.pop((section_id, username))
 

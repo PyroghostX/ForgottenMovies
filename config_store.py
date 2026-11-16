@@ -170,6 +170,9 @@ CONFIG_SCHEMA: list[dict] = [
     {"key": "PLEX_ROWS_WATCH_CHECK_HOURS", "section": "Plex Rows", "type": "int", "required": False, "default": 6,
      "label": "Hours between watch checks", "env": "PLEX_ROWS_WATCH_CHECK_HOURS",
      "help": "How often Tautulli is asked whether row items have been watched by their requester."},
+    {"key": "PLEX_ROWS_WATCHED_GRACE_HOURS", "section": "Plex Rows", "type": "int", "required": False, "default": 24,
+     "label": "Hours a watched item stays on the row", "env": "PLEX_ROWS_WATCHED_GRACE_HOURS",
+     "help": "Once the requester watches any of an item (a few minutes is enough), it leaves their row this many hours later."},
 
     # --- Self-Service (unsubscribe) ---
     {"key": "BASE_URL", "section": "Self-Service", "type": "url", "required": False,

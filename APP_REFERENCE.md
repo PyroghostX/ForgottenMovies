@@ -33,7 +33,7 @@ Important request fields:
 - `plexUsername`, `plexId`, `email`: requester identity. `plexId` (Seerr `requestedBy.plexId`) is the primary key for matching a Plex friend; username and email are fallbacks.
 - `hide_from_plex_row`: admin chose to keep this request out of the requester's Plex row.
 - `plexUrl`, `mobilePlexUrl`, `posterUrl`: reminder email assets/links.
-- `tautulli_watch_date`: set when Tautulli says the requester already watched the item before a reminder is sent.
+- `tautulli_watch_date`: when the requester first watched any of the item (Tautulli play, or Plex progress/mark seen by the Plex Rows sync with the user's own token). Stops reminders; the item leaves the user's Plex row `PLEX_ROWS_WATCHED_GRACE_HOURS` (default 24) after this time. Tautulli is queried by the user's Tautulli `user_id` (matched by Plex id, username, then email), because Seerr keeps a user's old username after a Plex rename.
 - `email_sent`, `skip_email`, `eligible_for_email`: reminder workflow flags.
 - `title`: starts as `Unknown`, later filled from Tautulli metadata/history.
 - New records try to store a real title immediately. The app first checks title-like fields from Seerr, then asks Tautulli metadata for up to `TAUTULLI_NEW_REQUEST_METADATA_LIMIT` new unknown titles per run.
@@ -66,7 +66,7 @@ Token safety (incident 2026-09-19): plex.tv binds each token to a device and rew
 - Seerr: `GET {OVERSEERR_URL}/request?take=...&filter=available&sort=added`. The env var names remain `OVERSEERR_*` for backward compatibility.
 - Tautulli:
   - `get_server_info` for startup checks.
-  - `get_history` in `has_user_watched_media(user, rating_key, media_type)`.
+  - `get_history` in `has_user_watched_media(user, rating_key, media_type, email, plex_id)`; `get_users` (cached 10 min) to find the user_id.
   - `get_metadata` in `get_tautulli_metadata(rating_key)`.
 - TMDB: optional poster lookup in `get_tmdb_poster()`.
 - SMTP: reminder sending in `send_email()`.

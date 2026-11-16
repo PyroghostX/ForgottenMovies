@@ -391,16 +391,18 @@ class PlexRowsClient:
         return cleared
 
     def watched_by(self, friend: Friend, wanted: dict[int, set[int]]) -> dict[int, str]:
-        """{ratingKey: lastViewedAt ISO} for the items this friend watched after they arrived.
+        """{ratingKey: lastViewedAt ISO} for the items this friend has watched any of since they arrived.
 
         ``wanted`` maps each rating key to the season numbers that were requested
         (empty = the whole movie/show). Asks the local server with the friend's
-        own token, so it is exact per user and sees marks-as-watched too. A view
-        only counts when it is newer than the item's (or season's) addedAt, so
-        earlier seasons watched before a new one was requested don't count.
-        Movies count when viewCount > 0; shows/seasons when an episode is watched.
-        Shows are judged by their episodes: for a friend's token Plex gives show
-        and season nodes a viewedLeafCount but no lastViewedAt.
+        own token, so it is exact per user and sees marks-as-watched too. Any
+        watch counts: a finished play (viewCount > 0) or a part-watched one
+        (viewOffset > 0). A view only counts when it is newer than the item's (or
+        episode's) addedAt, so earlier seasons watched before a new one was
+        requested don't count. Shows are judged by their episodes: for a
+        friend's token Plex gives show and season nodes a viewedLeafCount but no
+        lastViewedAt, and a part-watched episode is not in viewedLeafCount.
+        The caller decides when a watch is old enough to drop the item.
         """
         if not friend.access_token or not wanted:
             return {}
@@ -412,8 +414,8 @@ class PlexRowsClient:
             return resp.json().get("MediaContainer", {}).get("Metadata", []) or []
 
         def viewed_after_added(node: dict) -> int:
-            """lastViewedAt if this movie/episode was watched after it was added, else 0."""
-            seen = int(node.get("viewCount") or 0) > 0
+            """lastViewedAt if any of this movie/episode was watched after it was added, else 0."""
+            seen = int(node.get("viewCount") or 0) > 0 or int(node.get("viewOffset") or 0) > 0
             last = int(node.get("lastViewedAt") or 0)
             return last if seen and last >= int(node.get("addedAt") or 0) else 0
 
@@ -430,8 +432,6 @@ class PlexRowsClient:
                 key = int(item["ratingKey"])
                 seasons = wanted.get(key) or set()
                 if item.get("type") == "show":
-                    if not int(item.get("viewedLeafCount") or 0):
-                        continue
                     try:
                         episodes = get(f"/library/metadata/{key}/allLeaves")
                     except Exception as exc:
